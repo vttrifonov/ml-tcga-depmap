@@ -4,3 +4,9 @@
 [submodule "gdc"]
 	path = gdc
 	url = ssh://git@github.com/vttrifonov/gdc.git
+[submodule "go"]
+	path = go
+	url = ssh://git@github.com/vttrifonov/go.git
+[submodule "ncbi"]
+	path = ncbi
+	url = ssh://git@github.com/vttrifonov/ncbi.git
