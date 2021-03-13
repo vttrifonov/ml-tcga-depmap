@@ -1,7 +1,7 @@
 import pandas as pd
 import scipy.sparse as sparse
-from common.defs import lazy_property, pipe
-from common.dir import Dir, cached_property
+from common.defs import lazy_property, pipe, lfilter, lazy_method
+from common.dir import Dir, cached_property, cached_method
 from gdc.snv import snv
 import numpy as np
 import ae
@@ -17,110 +17,6 @@ class SparseMat:
 
         self.mat = sparse.coo_matrix((v, (self.namerows[i], self.namecols[j])))
 
-
-class ZarrMat:
-    @property
-    @cached_property(type=Dir.zarr(chunks=(1, None)))
-    def mat(self):
-        return np.empty()
-
-    @property
-    @cached_property(type=Dir.csv)
-    def rownames(self):
-        return pd.DataFrame({'rownames': pd.Series(dtype='str')})
-
-    @property
-    @cached_property(type=Dir.csv)
-    def colnames(self):
-        return pd.DataFrame({'colnames': pd.Series(dtype='str')})
-
-    def append(self, sparse):
-        sparse_rownames = pd.DataFrame({'rownames': sparse.rownames}).astype(str)
-        sparse_colnames = pd.DataFrame({'colnames': sparse.colnames}).astype(str)
-        sparse_mat = sparse.mat.todense()
-
-        rownames = self.rownames.astype(str)
-        if rownames.shape[0] == 0:
-            rownames = sparse_rownames
-            colnames = sparse_colnames
-            Dir.zarr(chunks=(1, None))(self.storage, 'mat').store(sparse_mat)
-        else:
-            colnames = self.colnames.astype(str)
-
-            rownames['row1'] = range(rownames.shape[0])
-            sparse_rownames['row2'] = range(sparse_rownames.shape[0])
-            rownames = rownames.merge(sparse_rownames, right_on='rownames', left_on='rownames', how='outer')
-            rownames = rownames.sort_values(by=['row1', 'row2'])
-            rownames['row1'] = range(rownames.shape[0])
-            rows = rownames[~rownames.row2.isna()].sort_values(['row2'])
-            rownames = rownames[['rownames']]
-
-            colnames['col1'] = range(colnames.shape[0])
-            sparse_colnames['col2'] = range(sparse_colnames.shape[0])
-            colnames = colnames.merge(sparse_colnames, right_on='colnames', left_on='colnames', how='outer')
-            colnames = colnames.sort_values(by=['col1', 'col2'])
-            colnames['col1'] = range(colnames.shape[0])
-            cols = colnames[~colnames.col2.isna()].sort_values(['col2'])
-            colnames = colnames[['colnames']]
-
-            mat = self.mat
-            mat.resize((rownames.shape[0], colnames.shape[0]))
-            mat.set_orthogonal_selection(
-                (rows.row1, cols.col1),
-                sparse_mat
-            )
-
-        Dir.csv(self.storage, 'rownames').store(rownames)
-        Dir.csv(self.storage, 'colnames').store(colnames)
-
-class SparseMat1:
-    @lazy_property
-    @cached_property(type=Dir.csv)
-    def row(self):
-        return None
-
-    @property
-    def rownames(self):
-        return self.row.name
-
-    @property
-    def namerows(self):
-        return pd.Series(range(len(self.rownames)), index=self.rownames)
-
-    @lazy_property
-    @cached_property(type=Dir.csv)
-    def col(self):
-        return None
-
-    @property
-    def colnames(self):
-        return self.col.name
-
-    @property
-    def namecols(self):
-        return pd.Series(range(len(self.colnames)), index=self.colnames)
-
-    def slice(self, i):
-        return Dir.csv(self.storage.child('slice'), str(i)).restore()
-
-    def assign(self, i, j, v):
-        Dir.csv(self.storage, 'row').store(pd.DataFrame(dict(name=list(set(i)))))
-        Dir.csv(self.storage, 'col').store(pd.DataFrame(dict(name=list(set(j)))))
-
-        x = pd.DataFrame({
-            'i': self.namerows[i].tolist(),
-            'j': self.namecols[j].tolist(),
-            'v': v
-        })
-        slice = self.storage.child('slice')
-        slice.create = False
-        if slice.exists:
-            slice.remove()
-        slice.create = True
-        slice.exists
-        for i, group in x.groupby('i'):
-            Dir.csv(slice, str(i)).store(group)
-
 class Analysis1:
     @classmethod
     def project_workflow_data(cls, project_id, workflow_type):
@@ -131,7 +27,7 @@ class Analysis1:
     def project_data(self, project_id):
         x1 = (
              self.project_workflow_data(project_id, workflow_type)
-             for workflow_type in snv.project_workflows(project_id).workflow_type
+             for workflow_type in snv.project_workflows(project_id)
          ) |pipe| pd.concat
 
         x2 = x1[['case_id', 'Entrez_Gene_Id', 'Variant_Classification']].drop_duplicates()
@@ -141,15 +37,16 @@ class Analysis1:
             'RNA', 'IGR'
         ])]
         x2 = x2[['case_id', 'Entrez_Gene_Id']].drop_duplicates()
-        return SparseMat(x2.case_id, x2.Entrez_Gene_Id, [1] * x2.shape[0])
+        x2 = SparseMat(x2.case_id, x2.Entrez_Gene_Id, [1] * x2.shape[0])
+
+        return x2
 
     @lazy_property
     def storage(self):
         return self.cache.child('analysis1')
 
-    @lazy_property
-    def snv(self):
-        x2 = self.project_data(self.project_id)
+    def snv(self, project_id):
+        x2 = self.project_data(project_id)
         x2.row_stats = pd.DataFrame({
             "case_id": x2.rownames,
             "mean": np.asarray(x2.mat.mean(axis=1)).flatten(),
@@ -167,13 +64,122 @@ class Analysis1:
             train = np.asarray(snv.mat.todense())
             x = train[:, train.sum(axis=0)>2]
             train = np.random.random(x.shape[0])<0.7
+            self.train1 = x[train,:]
             self.train = x[train,:]
             self.test = x[~train,:]
 
-    @lazy_property
-    def snv_data(self):
-        return self.SNVData(self.snv)
+    def snv_data(self, project_id):
+        return self.SNVData(self.snv(project_id))
 
+
+    class SNV1:
+        @property
+        def cases(self):
+            m = snv.manifest
+            return m[m.project_id.str.match('TCGA')][['project_id', 'case_id']].\
+                drop_duplicates().\
+                reset_index(drop=True)
+
+        @property
+        @cached_property(type=Dir.csv)
+        def genes(self):
+            global case_genes
+
+            import multiprocessing as mp
+
+            def case_genes(case_id):
+                print(f'{case_id}')
+                return set(self.case_data(case_id).Entrez_Gene_Id)
+
+            with mp.Pool(10) as pool:
+                g = pool.map(case_genes, self.cases.case_id)
+
+            g = list(set([]).union(*g))
+            g.sort()
+
+            return pd.DataFrame({'Entrez_Gene_Id': g})
+
+        @cached_method(type=Dir.csv, key=lambda case_id: f'{case_id}')
+        def case_data(self, case_id):
+            m = snv.manifest
+            m = m[m.case_id == case_id]
+            x1 = (
+                snv.case_data(workflow_type, case_id)
+                for workflow_type in m.workflow_type
+            ) |pipe|\
+                lfilter(lambda x: x is not None) |pipe| list
+
+            if not x1:
+                return pd.DataFrame({'Entrez_Gene_Id': []})
+
+            x1 = pd.concat(x1)
+            x2 = x1[['case_id', 'Entrez_Gene_Id', 'Variant_Classification']].drop_duplicates()
+            x2 = x2.loc[~x2.Variant_Classification.isin([
+                'Silent', 'Intron',
+                "3'UTR", "5'UTR", "3'Flank", "5'Flank",
+                'RNA', 'IGR'
+            ])]
+            return x2[['Entrez_Gene_Id']].drop_duplicates()
+
+        @lazy_method(key=lambda case_id: f'{case_id}')
+        def lazy_case_data(self, case_id):
+            return self.case_data(case_id)
+
+        case_data1 = case_data
+
+        def case_data2(self, case_id):
+            print(case_id)
+            return self.lazy_case_data(case_id)
+
+        def itercases(self, cases, genes):
+            i = pd.Series(range(len(genes)), index=genes)
+            for case_id in cases:
+                g = self.case_data1(case_id).Entrez_Gene_Id
+                g = g[g.isin(genes)]
+                yield i[g]
+
+        def dense_tensor(self, cases, genes):
+            import tensorflow as tf
+
+            def gen(cases, genes):
+                for case in self.itercases(cases, genes):
+                    t = np.full((len(genes),), 0)
+                    t[case] = 1
+                    yield t, t
+
+            return tf.data.Dataset.from_generator(
+                lambda: gen(cases, genes),
+                output_shapes=((len(genes),), (len(genes),)),
+                output_types=(tf.float64, tf.float64)
+            )
+
+    @lazy_property
+    def snv1(self):
+        snv1 = self.SNV1()
+        snv1.storage = self.storage.child('snv1')
+        snv1.analysis = self
+        return snv1
+
+    class SNV1Data(ae.Data):
+        def __init__(self, snv, cases, genes):
+            self.snv = snv
+
+            if cases is None:
+                cases = snv.cases.case_id
+            if genes is None:
+                genes = snv.genes.Entrez_Gene_Id
+
+            train = np.random.random(len(cases))<0.7
+            self.n_train = sum(train)
+            self.cases = cases
+            self.genes = genes
+            self.train1 = snv.dense_tensor(cases[train], genes).batch(sum(train))
+            self.train = snv.dense_tensor(cases[train], genes).repeat().batch(sum(train))
+            self.test = snv.dense_tensor(cases[~train], genes).batch(sum(~train))
+
+
+    def snv1_data(self, cases = None, genes = None):
+        return self.SNV1Data(self.snv1, cases, genes)
 
 analysis1 = Analysis1()
 analysis1.cache = Dir(Path.home() / ".cache" / "ml-tcga-depmap")
