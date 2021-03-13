@@ -29,22 +29,19 @@ class SparseMat1:
 
     @lazy_property
     def namecols(self):
-        return {name: i for i, name in enumerate(self.colnames)}
+        return pd.DataFrame({
+            'col': range(len(self.colnames))
+        }, index=self.colnames)
 
     @lazy_method(key=lambda name: name)
     def row(self, name):
-        cols, values = self.row_data(name)
-        filter = [col in self.namecols for col in cols]
-        return (
-            [self.namecols[col] for col in cols[filter]],
-            values[filter]
-        )
+        return  self.row_data(name).join(self.namecols)
 
     def iter(self, names):
         for name in names:
             row = np.full((self.m,), self.default)
-            cols, values = self.row(name)
-            row[cols] = values
+            data = self.row(name)
+            row[data.col] = data.value
             yield row
 
     def tensor(self, names):
@@ -166,7 +163,7 @@ class Analysis1:
 
             def row_data(self, name):
                 g = self.snv.case_data(name).Entrez_Gene_Id
-                return (g, np.ones(len(g)))
+                return pd.DataFrame({'value': [1]*len(g)}, index=g)
 
         def mat(self, genes):
             return self.Mat(self, genes)
