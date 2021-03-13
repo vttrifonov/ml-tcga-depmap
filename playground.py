@@ -12,18 +12,24 @@ import ae
 import analysis1
 
 a = analysis1.analysis1
-a.snv1.case_data1 = a.snv1.lazy_case_data
 
 cases = a.snv1.cases
 cases = cases[cases.project_id == 'TCGA-COAD'].case_id
 
 d1 = a.snv1_data(cases)
+import time
+t0 = time.time()
+for x, y in d1.iter.tensor(d1.cases):
+    pass
+print(time.time()-t0)
 
 d1.m = d1.fit(ae.AE(len(d1.genes), 100, 'linear', 'linear', 'adam', 'mse'))
+t0 = time.time()
 d1.m.fit(
     epochs=10,
     steps_per_epoch=1
 )
+print(time.time()-t0)
 
 def plot_roc(obs, pred):
     from sklearn.metrics import roc_curve, auc

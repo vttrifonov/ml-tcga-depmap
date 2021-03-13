@@ -119,39 +119,37 @@ class Analysis1:
                 "3'UTR", "5'UTR", "3'Flank", "5'Flank",
                 'RNA', 'IGR'
             ])]
-            return x2[['Entrez_Gene_Id']].drop_duplicates()
+            x2 = x2[['Entrez_Gene_Id']].drop_duplicates()
+            return x2
 
-        @lazy_method(key=lambda case_id: f'{case_id}')
-        def lazy_case_data(self, case_id):
-            return self.case_data(case_id)
+        class IterCases:
+            @lazy_property
+            def m(self):
+                return len(self.genes)
 
-        case_data1 = case_data
+            @lazy_property
+            def idx(self):
+                return pd.Series(range(self.m), index=self.genes)
 
-        def case_data2(self, case_id):
-            print(case_id)
-            return self.lazy_case_data(case_id)
+            @lazy_method(key=lambda case_id: case_id)
+            def case_data(self, case_id):
+                g = self.snv.case_data(case_id).Entrez_Gene_Id
+                g = g[g.isin(self.genes)]
+                return self.idx[g]
 
-        def itercases(self, cases, genes):
-            i = pd.Series(range(len(genes)), index=genes)
-            for case_id in cases:
-                g = self.case_data1(case_id).Entrez_Gene_Id
-                g = g[g.isin(genes)]
-                yield i[g]
-
-        def dense_tensor(self, cases, genes):
-            import tensorflow as tf
-
-            def gen(cases, genes):
-                for case in self.itercases(cases, genes):
-                    t = np.full((len(genes),), 0)
-                    t[case] = 1
+            def iter(self, cases):
+                for case_id in cases:
+                    t = np.full((self.m,), 0)
+                    t[self.case_data(case_id)] = 1
                     yield t, t
 
-            return tf.data.Dataset.from_generator(
-                lambda: gen(cases, genes),
-                output_shapes=((len(genes),), (len(genes),)),
-                output_types=(tf.float64, tf.float64)
-            )
+            def tensor(self, cases):
+                import tensorflow as tf
+                return tf.data.Dataset.from_generator(
+                    lambda: self.iter(cases),
+                    output_shapes=((self.m,), (self.m,)),
+                    output_types=(tf.float64, tf.float64)
+                )
 
     @lazy_property
     def snv1(self):
@@ -162,20 +160,24 @@ class Analysis1:
 
     class SNV1Data(ae.Data):
         def __init__(self, snv, cases, genes):
-            self.snv = snv
-
             if cases is None:
                 cases = snv.cases.case_id
             if genes is None:
                 genes = snv.genes.Entrez_Gene_Id
 
+            iter = snv.IterCases()
+            iter.genes = genes
+            iter.snv = snv
+
+            self.iter = iter
+
             train = np.random.random(len(cases))<0.7
             self.n_train = sum(train)
             self.cases = cases
             self.genes = genes
-            self.train1 = snv.dense_tensor(cases[train], genes).batch(sum(train))
-            self.train = snv.dense_tensor(cases[train], genes).repeat().batch(sum(train))
-            self.test = snv.dense_tensor(cases[~train], genes).batch(sum(~train))
+            self.train1 = iter.tensor(cases[train]).batch(sum(train))
+            self.train = iter.tensor(cases[train]).repeat().batch(sum(train))
+            self.test = iter.tensor(cases[~train]).batch(sum(~train))
 
 
     def snv1_data(self, cases = None, genes = None):
