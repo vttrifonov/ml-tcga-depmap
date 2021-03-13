@@ -18,6 +18,8 @@ class SparseMat:
         self.mat = sparse.coo_matrix((v, (self.namerows[i], self.namecols[j])))
 
 class SparseMat1:
+    default = 0
+
     def __init__(self, colnames):
         self.colnames = colnames
 
@@ -27,24 +29,28 @@ class SparseMat1:
 
     @lazy_property
     def namecols(self):
-        return pd.Series(range(self.m), index=self.colnames)
+        return {name: i for i, name in enumerate(self.colnames)}
 
     @lazy_method(key=lambda name: name)
     def row(self, name):
-        colnames = self.row_data(name)
-        colnames = colnames[colnames.isin(self.colnames)]
-        return self.namecols[colnames]
+        cols, values = self.row_data(name)
+        filter = [col in self.namecols for col in cols]
+        return (
+            [self.namecols[col] for col in cols[filter]],
+            values[filter]
+        )
 
     def iter(self, names):
         for name in names:
-            t = np.full((self.m,), 0)
-            t[self.row(name)] = 1
-            yield t, t
+            row = np.full((self.m,), self.default)
+            cols, values = self.row(name)
+            row[cols] = values
+            yield row
 
     def tensor(self, names):
         import tensorflow as tf
         return tf.data.Dataset.from_generator(
-            lambda: self.iter(names),
+            lambda: ((row, row) for row in self.iter(names)),
             output_shapes=((self.m,), (self.m,)),
             output_types=(tf.float64, tf.float64)
         )
@@ -159,7 +165,8 @@ class Analysis1:
                 self.snv = snv
 
             def row_data(self, name):
-                return self.snv.case_data(name).Entrez_Gene_Id
+                g = self.snv.case_data(name).Entrez_Gene_Id
+                return (g, np.ones(len(g)))
 
         def mat(self, genes):
             return self.Mat(self, genes)

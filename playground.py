@@ -20,11 +20,11 @@ d1 = a.snv1_data(cases)
 
 import time
 t0 = time.time()
-for x, y in d1.mat.tensor(d1.cases):
+for x in d1.mat.tensor(d1.cases):
     pass
 print(time.time()-t0)
 
-d1.m = d1.fit(ae.AE(len(d1.genes), 100, 'linear', 'linear', 'adam', 'mse'))
+d1.m = d1.fit(ae.AE(d1.mat.m, 100, 'linear', 'linear', 'adam', 'mse'))
 t0 = time.time()
 d1.m.fit(
     epochs=10,
