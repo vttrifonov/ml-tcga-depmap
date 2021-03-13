@@ -17,9 +17,10 @@ cases = a.snv1.cases
 cases = cases[cases.project_id == 'TCGA-COAD'].case_id
 
 d1 = a.snv1_data(cases)
+
 import time
 t0 = time.time()
-for x, y in d1.iter.tensor(d1.cases):
+for x, y in d1.mat.tensor(d1.cases):
     pass
 print(time.time()-t0)
 

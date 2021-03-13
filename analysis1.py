@@ -17,6 +17,38 @@ class SparseMat:
 
         self.mat = sparse.coo_matrix((v, (self.namerows[i], self.namecols[j])))
 
+class SparseMat1:
+    def __init__(self, colnames):
+        self.colnames = colnames
+
+    @lazy_property
+    def m(self):
+        return len(self.colnames)
+
+    @lazy_property
+    def namecols(self):
+        return pd.Series(range(self.m), index=self.colnames)
+
+    @lazy_method(key=lambda name: name)
+    def row(self, name):
+        colnames = self.row_data(name)
+        colnames = colnames[colnames.isin(self.colnames)]
+        return self.namecols[colnames]
+
+    def iter(self, names):
+        for name in names:
+            t = np.full((self.m,), 0)
+            t[self.row(name)] = 1
+            yield t, t
+
+    def tensor(self, names):
+        import tensorflow as tf
+        return tf.data.Dataset.from_generator(
+            lambda: self.iter(names),
+            output_shapes=((self.m,), (self.m,)),
+            output_types=(tf.float64, tf.float64)
+        )
+
 class Analysis1:
     @classmethod
     def project_workflow_data(cls, project_id, workflow_type):
@@ -71,7 +103,6 @@ class Analysis1:
     def snv_data(self, project_id):
         return self.SNVData(self.snv(project_id))
 
-
     class SNV1:
         @property
         def cases(self):
@@ -122,34 +153,16 @@ class Analysis1:
             x2 = x2[['Entrez_Gene_Id']].drop_duplicates()
             return x2
 
-        class IterCases:
-            @lazy_property
-            def m(self):
-                return len(self.genes)
+        class Mat(SparseMat1):
+            def __init__(self, snv, genes):
+                super().__init__(genes)
+                self.snv = snv
 
-            @lazy_property
-            def idx(self):
-                return pd.Series(range(self.m), index=self.genes)
+            def row_data(self, name):
+                return self.snv.case_data(name).Entrez_Gene_Id
 
-            @lazy_method(key=lambda case_id: case_id)
-            def case_data(self, case_id):
-                g = self.snv.case_data(case_id).Entrez_Gene_Id
-                g = g[g.isin(self.genes)]
-                return self.idx[g]
-
-            def iter(self, cases):
-                for case_id in cases:
-                    t = np.full((self.m,), 0)
-                    t[self.case_data(case_id)] = 1
-                    yield t, t
-
-            def tensor(self, cases):
-                import tensorflow as tf
-                return tf.data.Dataset.from_generator(
-                    lambda: self.iter(cases),
-                    output_shapes=((self.m,), (self.m,)),
-                    output_types=(tf.float64, tf.float64)
-                )
+        def mat(self, genes):
+            return self.Mat(self, genes)
 
     @lazy_property
     def snv1(self):
@@ -165,19 +178,14 @@ class Analysis1:
             if genes is None:
                 genes = snv.genes.Entrez_Gene_Id
 
-            iter = snv.IterCases()
-            iter.genes = genes
-            iter.snv = snv
-
-            self.iter = iter
+            self.mat = snv.mat(genes)
 
             train = np.random.random(len(cases))<0.7
             self.n_train = sum(train)
             self.cases = cases
-            self.genes = genes
-            self.train1 = iter.tensor(cases[train]).batch(sum(train))
-            self.train = iter.tensor(cases[train]).repeat().batch(sum(train))
-            self.test = iter.tensor(cases[~train]).batch(sum(~train))
+            self.train1 = self.mat.tensor(cases[train]).batch(sum(train))
+            self.train = self.mat.tensor(cases[train]).repeat().batch(sum(train))
+            self.test = self.mat.tensor(cases[~train]).batch(sum(~train))
 
 
     def snv1_data(self, cases = None, genes = None):
