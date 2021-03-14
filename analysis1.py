@@ -57,35 +57,15 @@ class SparseMat1:
         )
 
 class Analysis1:
-    @classmethod
-    def project_workflow_data(cls, project_id, workflow_type):
-        print(f'{project_id} {workflow_type}')
-        x = snv.project_data(project_id, workflow_type)
-        return x
-
-    def project_data(self, project_id):
-        x1 = (
-             self.project_workflow_data(project_id, workflow_type)
-             for workflow_type in snv.project_workflows(project_id)
-         ) |pipe| pd.concat
-
-        x2 = x1[['case_id', 'Entrez_Gene_Id', 'Variant_Classification']].drop_duplicates()
-        x2 = x2.loc[~x2.Variant_Classification.isin([
-            'Silent', 'Intron',
-            "3'UTR", "5'UTR", "3'Flank", "5'Flank",
-            'RNA', 'IGR'
-        ])]
-        x2 = x2[['case_id', 'Entrez_Gene_Id']].drop_duplicates()
-        x2 = SparseMat(x2.case_id, x2.Entrez_Gene_Id, [1] * x2.shape[0])
-
-        return x2
-
     @lazy_property
     def storage(self):
         return self.cache.child('analysis1')
 
     def snv(self, project_id):
-        x2 = self.project_data(project_id)
+        cases = self.snv1.cases
+        cases = cases[cases.project_id == project_id].case_id.reset_index(drop=True)
+        genes = self.snv1.genes.Entrez_Gene_Id
+        x2 = self.snv1.mat(genes).sparse(cases)
         x2.row_stats = pd.DataFrame({
             "case_id": x2.rownames,
             "mean": np.asarray(x2.mat.mean(axis=1)).flatten(),
