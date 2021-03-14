@@ -13,11 +13,11 @@ import analysis1
 
 a = analysis1.analysis1
 
-cases = a.snv1.cases
+cases = a.snv.cases
 cases = cases[cases.project_id == 'TCGA-COAD'].case_id.reset_index(drop=True)
 #cases = cases.case_id
 
-d1 = a.snv1_data(cases)
+d1 = a.snv_data1(cases)
 
 d1.m = d1.fit(ae.AE(d1.mat.m, 100, 'linear', 'linear', 'adam', 'mse'))
 d1.m.fit(

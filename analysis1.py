@@ -8,14 +8,17 @@ import ae
 from pathlib import Path
 
 class SparseMat:
-    def __init__(self, i, j, v):
-        self.rownames = list(set(i))
-        self.namerows = pd.Series(range(len(self.rownames)), index=self.rownames)
+    def __init__(self, i, j, v, rownames, colnames):
+        self.rownames = rownames
+        self.namerows = pd.Series(range(len(rownames)), index=rownames)
 
-        self.colnames = list(set(j))
-        self.namecols = pd.Series(range(len(self.colnames)), index=self.colnames)
+        self.colnames = colnames
+        self.namecols = pd.Series(range(len(colnames)), index=colnames)
 
-        self.mat = sparse.coo_matrix((v, (self.namerows[i], self.namecols[j])))
+        self.mat = sparse.coo_matrix(
+            (v, (self.namerows[i], self.namecols[j])),
+            shape=(len(rownames), len(colnames))
+        )
 
 class SparseMat1:
     default = 0
@@ -36,7 +39,7 @@ class SparseMat1:
     def sparse_row(self, name):
         row = self.row_data(name).join(self.namecols)
         row['row'] = name
-        return  row
+        return row
 
     def dense_row(self, name):
         row = np.full((self.m,), self.default)
@@ -46,7 +49,10 @@ class SparseMat1:
 
     def sparse(self, names):
         data = pd.concat((self.sparse_row(name) for name in names))
-        return SparseMat(data.row, data.col, data.value)
+        return SparseMat(
+            data.row, self.colnames[data.col], data.value,
+            names, self.colnames
+        )
 
     def tensor(self, names):
         import tensorflow as tf
@@ -61,7 +67,7 @@ class Analysis1:
     def storage(self):
         return self.cache.child('analysis1')
 
-    class SNV1:
+    class SNV:
         @property
         def cases(self):
             m = snv.manifest
@@ -128,11 +134,11 @@ class Analysis1:
             return self.Mat(self, genes)
 
     @lazy_property
-    def snv1(self):
-        snv1 = self.SNV1()
-        snv1.storage = self.storage.child('snv1')
-        snv1.analysis = self
-        return snv1
+    def snv(self):
+        snv = self.SNV()
+        snv.storage = self.storage.child('snv')
+        snv.analysis = self
+        return snv
 
     class SNVData(ae.Data):
         def __init__(self, snv, cases, genes):
@@ -143,18 +149,18 @@ class Analysis1:
 
             self.mat = snv.mat(genes)
 
-            train = self.mat.sparse(cases).mat.toarray()
-
-            x = train[:, train.sum(axis=0)>2]
-            train = np.random.random(x.shape[0])<0.7
-            self.train1 = x[train,:]
-            self.train = x[train,:]
-            self.test = x[~train,:]
+            train = np.random.random(len(cases))<0.7
+            x = self.mat.sparse(cases).mat.toarray()
+            self.n_train = sum(train)
+            self.cases = cases
+            self.train1 = x[train, :]
+            self.train = x[train, :]
+            self.test = x[~train, :]
 
     def snv_data(self, cases = None, genes = None):
-        return self.SNVData(self.snv1, cases, genes)
+        return self.SNVData(self.snv, cases, genes)
 
-    class SNV1Data(ae.Data):
+    class SNVData1(ae.Data):
         def __init__(self, snv, cases, genes):
             if cases is None:
                 cases = snv.cases.case_id
@@ -170,9 +176,8 @@ class Analysis1:
             self.train = self.mat.tensor(cases[train]).repeat().batch(sum(train))
             self.test = self.mat.tensor(cases[~train]).batch(sum(~train))
 
-
-    def snv1_data(self, cases = None, genes = None):
-        return self.SNV1Data(self.snv1, cases, genes)
+    def snv_data1(self, cases = None, genes = None):
+        return self.SNVData1(self.snv, cases, genes)
 
 analysis1 = Analysis1()
 analysis1.cache = Dir(Path.home() / ".cache" / "ml-tcga-depmap")
