@@ -33,21 +33,25 @@ class SparseMat1:
             'col': range(len(self.colnames))
         }, index=self.colnames)
 
-    @lazy_method(key=lambda name: name)
-    def row(self, name):
-        return  self.row_data(name).join(self.namecols)
+    def sparse_row(self, name):
+        row = self.row_data(name).join(self.namecols)
+        row['row'] = name
+        return  row
 
-    def iter(self, names):
-        for name in names:
-            row = np.full((self.m,), self.default)
-            data = self.row(name)
-            row[data.col] = data.value
-            yield row
+    def dense_row(self, name):
+        row = np.full((self.m,), self.default)
+        data = self.sparse_row(name)
+        row[data.col] = data.value
+        return row
+
+    def sparse(self, names):
+        data = pd.concat((self.sparse_row(name) for name in names))
+        return SparseMat(data.row, data.col, data.value)
 
     def tensor(self, names):
         import tensorflow as tf
         return tf.data.Dataset.from_generator(
-            lambda: ((row, row) for row in self.iter(names)),
+            lambda: ((row, row) for row in (self.dense_row(name) for name in names)),
             output_shapes=((self.m,), (self.m,)),
             output_types=(tf.float64, tf.float64)
         )
@@ -160,6 +164,10 @@ class Analysis1:
             def __init__(self, snv, genes):
                 super().__init__(genes)
                 self.snv = snv
+
+            @lazy_method(key=lambda name: name)
+            def sparse_row(self, name):
+                return super().sparse_row(name)
 
             def row_data(self, name):
                 g = self.snv.case_data(name).Entrez_Gene_Id

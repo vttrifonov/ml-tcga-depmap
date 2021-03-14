@@ -14,23 +14,18 @@ import analysis1
 a = analysis1.analysis1
 
 cases = a.snv1.cases
-cases = cases[cases.project_id == 'TCGA-COAD'].case_id
+cases = cases[cases.project_id == 'TCGA-COAD'].case_id.reset_index(drop=True)
+#cases = cases.case_id
 
 d1 = a.snv1_data(cases)
 
-import time
-t0 = time.time()
-for x in d1.mat.tensor(d1.cases):
-    pass
-print(time.time()-t0)
+m = d1.mat.sparse(cases)
 
 d1.m = d1.fit(ae.AE(d1.mat.m, 100, 'linear', 'linear', 'adam', 'mse'))
-t0 = time.time()
 d1.m.fit(
     epochs=10,
     steps_per_epoch=1
 )
-print(time.time()-t0)
 
 def plot_roc(obs, pred):
     from sklearn.metrics import roc_curve, auc
