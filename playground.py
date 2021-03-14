@@ -19,11 +19,9 @@ cases = cases[cases.project_id == 'TCGA-COAD'].case_id.reset_index(drop=True)
 
 d1 = a.snv1_data(cases)
 
-m = d1.mat.sparse(cases)
-
 d1.m = d1.fit(ae.AE(d1.mat.m, 100, 'linear', 'linear', 'adam', 'mse'))
 d1.m.fit(
-    epochs=10,
+    epochs=100,
     steps_per_epoch=1
 )
 
@@ -63,14 +61,14 @@ def m_train_aucs(m):
         lapply(lambda i: roc(m.data.train[i, :], m.train_decoded[i, :])) |pipe|\
         lapply(lambda x: x[2]) |pipe| list
 
-d = a.snv_data('TCGA-COAD')
+d = a.snv_data(cases)
 d.m = {}
 
 d.m['pca'] = d.fit(ae.PCA(100)).fit()
 
 d.m['ae1'] = d.fit(ae.AE(d.train.shape[1], 100, 'linear', 'linear', 'adam', 'mse'))
 d.m["ae1"].fit(
-    epochs=10,
+    epochs=100,
     batch_size=d.train.shape[0],
     shuffle=False
 )

@@ -61,35 +61,6 @@ class Analysis1:
     def storage(self):
         return self.cache.child('analysis1')
 
-    def snv(self, project_id):
-        cases = self.snv1.cases
-        cases = cases[cases.project_id == project_id].case_id.reset_index(drop=True)
-        genes = self.snv1.genes.Entrez_Gene_Id
-        x2 = self.snv1.mat(genes).sparse(cases)
-        x2.row_stats = pd.DataFrame({
-            "case_id": x2.rownames,
-            "mean": np.asarray(x2.mat.mean(axis=1)).flatten(),
-        })
-        x2.col_stats = pd.DataFrame({
-            'Entrez_Gene_Id': x2.colnames,
-            "mean": np.asarray(x2.mat.mean(axis=0)).flatten(),
-        })
-        x2.analysis = self
-        return x2
-
-    class SNVData(ae.Data):
-        def __init__(self, snv):
-            self.snv = snv
-            train = np.asarray(snv.mat.todense())
-            x = train[:, train.sum(axis=0)>2]
-            train = np.random.random(x.shape[0])<0.7
-            self.train1 = x[train,:]
-            self.train = x[train,:]
-            self.test = x[~train,:]
-
-    def snv_data(self, project_id):
-        return self.SNVData(self.snv(project_id))
-
     class SNV1:
         @property
         def cases(self):
@@ -162,6 +133,26 @@ class Analysis1:
         snv1.storage = self.storage.child('snv1')
         snv1.analysis = self
         return snv1
+
+    class SNVData(ae.Data):
+        def __init__(self, snv, cases, genes):
+            if cases is None:
+                cases = snv.cases.case_id
+            if genes is None:
+                genes = snv.genes.Entrez_Gene_Id
+
+            self.mat = snv.mat(genes)
+
+            train = self.mat.sparse(cases).mat.toarray()
+
+            x = train[:, train.sum(axis=0)>2]
+            train = np.random.random(x.shape[0])<0.7
+            self.train1 = x[train,:]
+            self.train = x[train,:]
+            self.test = x[~train,:]
+
+    def snv_data(self, cases = None, genes = None):
+        return self.SNVData(self.snv1, cases, genes)
 
     class SNV1Data(ae.Data):
         def __init__(self, snv, cases, genes):
