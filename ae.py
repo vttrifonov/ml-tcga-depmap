@@ -58,21 +58,18 @@ class AE1:
         self.input_dim = input_dim
         self.latent_dim = encoder_dims[-1]
 
-        encoder_input = keras.Input(shape=(self.input_dim,))
-        encoder = encoder_input
+        encoder = keras.Sequential()
+        encoder.add(layers.Input(shape=(self.input_dim,)))
         for dim in encoder_dims:
-            encoder = layers.Dense(dim, activation='relu')(encoder)
-        encoder = keras.Model(encoder_input, encoder)
+            encoder.add(layers.Dense(dim, activation='relu'))
 
-        decoder_input = keras.Input(shape=(self.latent_dim,))
-        decoder = decoder_input
+        decoder = keras.Sequential()
+        decoder.add(layers.Input(shape=(self.latent_dim,)))
         for dim in decoder_dims:
-            decoder = layers.Dense(dim, activation='relu')(decoder)
-        decoder = layers.Dense(input_dim, activation='sigmoid')(decoder)
-        decoder = keras.Model(decoder_input, decoder)
+            decoder.add(layers.Dense(dim, activation='relu'))
+        decoder.add(layers.Dense(input_dim, activation='sigmoid'))
 
-        autoencoder_input = keras.Input(shape=(self.input_dim,))
-        autoencoder = keras.Model(autoencoder_input, decoder(encoder(autoencoder_input)))
+        autoencoder = keras.Model(encoder.input, decoder(encoder.output))
 
         autoencoder.compile(optimizer='adam', loss='binary_crossentropy')
 
@@ -127,34 +124,27 @@ class AE3:
     def __init__(
         self,
         input_dim,
-        encoder_dims,
-        decoder_dims
+        features_spec,
+        encoding_dim
     ):
         self.input_dim = input_dim
 
-        encoder = keras.Sequential([
-            layers.Dense(
-                encoder_dims[0][0],
-                input_shape=(input_dim,),
-                activation="relu", kernel_regularizer=keras.regularizers.l1_l2(encoder_dims[0][1], encoder_dims[0][2])
-            ),
-            layers.Dense(encoder_dims[1], activation="relu"),
-        ])
+        input = layers.Input((input_dim,))
+        sparse_features = layers.Dense(
+            features_spec[0],
+            activation="relu",
+            kernel_regularizer=keras.regularizers.l1_l2(features_spec[1], features_spec[2])
+        )(input)
+        x = layers.concatenate([input, sparse_features])
+        x = layers.Dense(encoding_dim, activation="relu")(x)
+        encoder = keras.Model(input, x)
 
         decoder = keras.Sequential([
-            layers.Dense(
-                decoder_dims[0],
-                input_shape = (encoder_dims[1],),
-                activation="relu"
-            ),
-            layers.Dense(
-                input_dim,
-                activation="sigmoid"
-            )
+            layers.Input((encoding_dim,)),
+            layers.Dense(input_dim, activation="sigmoid")
         ])
 
-        autoencoder_input = layers.Input(shape=(input_dim,))
-        autoencoder = keras.Model(autoencoder_input, decoder(encoder(autoencoder_input)))
+        autoencoder = keras.Model(input, decoder(encoder.output))
 
         autoencoder.compile(optimizer='adam', loss='binary_crossentropy')
 
