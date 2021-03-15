@@ -4,26 +4,13 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from common.defs import pipe, lapply
 import seaborn as sb
+import more_itertools as mit
 import ae
 import analysis1
 importlib.reload(ae)
 importlib.reload(analysis1)
 import ae
 import analysis1
-
-a = analysis1.analysis1
-
-cases = a.snv.cases
-cases = cases[cases.project_id == 'TCGA-COAD'].case_id.reset_index(drop=True)
-#cases = cases.case_id
-
-d1 = a.snv_data1(cases)
-
-d1.m = d1.fit(ae.AE(d1.mat.m, 100, 'linear', 'linear', 'adam', 'mse'))
-d1.m.fit(
-    epochs=100,
-    steps_per_epoch=1
-)
 
 def plot_roc(obs, pred):
     from sklearn.metrics import roc_curve, auc
@@ -52,46 +39,49 @@ def roc(obs, pred):
     return fpr, tpr, roc_auc
 
 def m_test_aucs(m):
-    return range(m.data.test.shape[0]) |pipe| \
+    return m.trrange(m.data.test.shape[0]) |pipe| \
         lapply(lambda i: roc(m.data.test[i, :], m.decoded[i, :])) |pipe|\
         lapply(lambda x: x[2]) |pipe| list
 
 def m_train_aucs(m):
-    return range(m.data.train.shape[0]) |pipe| \
-        lapply(lambda i: roc(m.data.train[i, :], m.train_decoded[i, :])) |pipe|\
+    return m.train_decoded |pipe|\
+        lapply(lambda x: roc(x[0][0, :], x[1][0,: ])) |pipe|\
         lapply(lambda x: x[2]) |pipe| list
 
-d = a.snv_data(cases)
+a = analysis1.analysis1
+
+cases = a.snv.cases
+cases = cases[cases.project_id == 'TCGA-COAD'].case_id.reset_index(drop=True)
+#cases = cases.case_id
+
+d = a.snv_data1(cases)
 d.m = {}
 
-d.m['pca'] = d.fit(ae.PCA(100)).fit()
+d.m['pca'] = d.fit(ae.PCA(100))
+d.m['pca'].ae.model.fit(mit.nth(d.train.batch(sum(d.select)), 0)[0])
 
-d.m['ae1'] = d.fit(ae.AE(d.train.shape[1], 100, 'linear', 'linear', 'adam', 'mse'))
-d.m["ae1"].fit(
-    epochs=100,
-    batch_size=d.train.shape[0],
-    shuffle=False
+d.m['ae1'] = d.fit(ae.AE(len(d.mat.colnames), 100, 'linear', 'linear', 'adam', 'mse'))
+d.m["ae1"].ae.model.fit(
+    d.train.batch(sum(d.select)).repeat(),
+    epochs=100, steps_per_epoch=1
 )
 
-d.m['ae2'] = d.fit(ae.AE(d.train.shape[1], 100, 'relu', 'sigmoid', 'adam', 'binary_crossentropy'))
-d.m["ae2"].fit(
-    epochs=100,
-    batch_size=d.train.shape[0],
-    shuffle=False
+d.m['ae2'] = d.fit(ae.AE(len(d.mat.colnames), 100, 'relu', 'sigmoid', 'adam', 'binary_crossentropy'))
+d.m["ae2"].ae.model.fit(
+    d.train.batch(sum(d.select)).repeat(),
+    epochs=100, steps_per_epoch=1
 )
 
-d.m['ae3'] = d.fit(ae.AE1(d.train.shape[1], [200, 100], [200]))
+d.m['ae3'] = d.fit(ae.AE1(len(d.mat.colnames), [200, 100], [200]))
 d.m['ae3'].fit(
-    epochs=100,
-    batch_size=d.train.shape[0],
-    shuffle=False
+    d.train.batch(sum(d.select)).repeat(),
+    epochs=100, steps_per_epoch=1
 )
 
-d.m['ae4'] = d.fit(ae.AE3(d.train.shape[1], [(200, 0.01, 1), 100], [200]))
+d.m['ae4'] = d.fit(ae.AE1(len(d.mat.colnames), [(200, 0.01, 1), 100], [200]))
 d.m['ae4'].fit(
-    epochs=100,
-    batch_size=d.train.shape[0],
-    shuffle=False
+    d.train.batch(sum(d.select)).repeat(),
+    epochs=100, steps_per_epoch=1
 )
 
 d.m |pipe|\
@@ -120,7 +110,6 @@ x2 = PCA().fit(m2)
 
 plt.imshow(x1.components_)
 plt.hist((x1@m1.T).flatten(), 100)
-
 
 (d.m['ae4'], 3) |pipe| (lambda x: sb.boxplot(x[0].data.test[x[1], :], x[0].decoded[x[1], :]))
 

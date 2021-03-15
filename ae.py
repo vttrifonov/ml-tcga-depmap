@@ -16,18 +16,17 @@ class AE:
         self.input_dim = input_dim
         self.encoding_dim = encoding_dim
 
-        input_img = keras.Input(shape=(self.input_dim,))
-        encoded = layers.Dense(self.encoding_dim, activation=encoder_activation)(input_img)
-        decoded = layers.Dense(self.input_dim, activation=decoder_activation)(encoded)
+        encoder = keras.Sequential([
+            layers.Input((self.input_dim,)),
+            layers.Dense(self.encoding_dim, activation=encoder_activation)
+        ])
 
-        autoencoder = keras.Model(input_img, decoded)
+        decoder = keras.Sequential([
+            layers.Input((self.encoding_dim,)),
+            layers.Dense(self.input_dim, activation=decoder_activation)
+        ])
 
-        encoder = keras.Model(input_img, encoded)
-
-        encoded_input = keras.Input(shape=(self.encoding_dim,))
-        decoder_layer = autoencoder.layers[-1]
-        decoder = keras.Model(encoded_input, decoder_layer(encoded_input))
-
+        autoencoder = keras.Model(encoder.input, decoder(encoder.output))
         autoencoder.compile(optimizer=optim, loss=loss)
 
         self.model = autoencoder
@@ -36,23 +35,6 @@ class AE:
 
         self.encode = encoder.predict
         self.decode = decoder.predict
-
-    def fit(self, data, **kwargs):
-        if isinstance(data.train, tf.data.Dataset):
-            self.model.fit(
-                x=data.train,
-                **{
-                    'validation_data': data.test,
-                    'validation_steps': 1,
-                    **kwargs
-                }
-            )
-        else:
-            self.model.fit(
-                data.train, data.train,
-                validation_data=(data.test, data.test),
-                **kwargs
-            )
         
 class PCA:
     def __init__(
@@ -66,9 +48,6 @@ class PCA:
         self.encode = self.model.transform
         self.decode = self.model.inverse_transform
 
-    def fit(self, data, **kwargs):
-        self.model.fit(data.train)
-        
 class AE1:
     def __init__(
         self,
@@ -103,13 +82,6 @@ class AE1:
 
         self.encode = encoder.predict
         self.decode = decoder.predict
-
-    def fit(self, data, **kwargs):
-        self.model.fit(
-            data.train, data.train,
-            validation_data=(data.test, data.test),
-            **kwargs
-        )
 
 class AE2:
     def __init__(
@@ -150,13 +122,6 @@ class AE2:
 
         self.encode = encoder.predict
         self.decode = decoder.predict
-
-    def fit(self, data, **kwargs):
-        self.model.fit(
-            data.train, data.train,
-            validation_data=(data.test, data.test),
-            **kwargs
-        )
 
 class AE3:
     def __init__(
@@ -199,13 +164,6 @@ class AE3:
 
         self.encode = encoder.predict
         self.decode = decoder.predict
-
-    def fit(self, data, **kwargs):
-        self.model.fit(
-            data.train, data.train,
-            validation_data=(data.test, data.test),
-            **kwargs
-        )
 
 class Data:
     class Fit:
@@ -252,17 +210,28 @@ class Data:
             zi = k.score_samples(zi).reshape(xi.shape)
             plt.pcolormesh(xi, yi, zi, cmap=plt.cm.terrain)
             plt.contour(xi, yi, zi)
-            
-        def fit(self, **kwargs):
-            self.ae.fit(self.data, **kwargs)
 
-            self.encoded = self.ae.encode(self.data.test)
-            self.decoded = self.ae.decode(self.encoded)
-            
-            self.train_encoded = self.ae.encode(self.data.train1)
-            self.train_decoded = self.ae.decode(self.train_encoded)
-            
-            return self
+        @property
+        def train_encoded(self):
+            for data in self.data.train.batch(1):
+                mat = data[0].numpy()
+                yield (mat, self.ae.encode(mat))
+
+        @property
+        def train_decoded(self):
+            for mat, enc in self.train_encoded:
+                yield (mat, self.ae.decode(enc))
+
+        @property
+        def test_encoded(self):
+            for data in self.data.test.batch(1):
+                mat = data[0].numpy()
+                yield (mat, self.ae.encode(mat))
+
+        @property
+        def test_decoded(self):
+            for mat, enc in self.test_encoded:
+                yield (mat, self.ae.decode(enc))
 
     def fit(self, ae, **kwargs):
         return self.Fit(self, ae, **kwargs)

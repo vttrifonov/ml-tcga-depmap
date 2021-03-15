@@ -169,12 +169,11 @@ class Analysis1:
 
             self.mat = snv.mat(genes)
 
-            train = np.random.random(len(cases))<0.7
-            self.n_train = sum(train)
+            select = np.random.random(len(cases))<0.7
             self.cases = cases
-            self.train1 = self.mat.tensor(cases[train]).batch(sum(train))
-            self.train = self.mat.tensor(cases[train]).repeat().batch(sum(train))
-            self.test = self.mat.tensor(cases[~train]).batch(sum(~train))
+            self.select = select
+            self.train = self.mat.tensor(cases[select])
+            self.test = self.mat.tensor(cases[~select])
 
     def snv_data1(self, cases = None, genes = None):
         return self.SNVData1(self.snv, cases, genes)
