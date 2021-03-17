@@ -12,6 +12,7 @@ importlib.reload(ae)
 importlib.reload(analysis1)
 import ae
 import analysis1
+from snv import snv
 
 def roc(obs, pred):
     from sklearn.metrics import roc_curve, auc
@@ -44,21 +45,21 @@ def m_aucs(data):
 
 a = analysis1.analysis1
 
-cases = a.snv.cases
+cases = snv.cases
 cases = cases[cases.project_id == 'TCGA-COAD'].case_id.reset_index(drop=True)
 #cases = cases.case_id
 
-d = a.snv_data1(cases)
+d = a.snv_data(cases)
 d.m = {}
 
 d.m['pca'] = d.fit(ae.PCA(100))
-d.m['pca'].ae.model.fit(mit.nth(d.train.batch(sum(d.select)), 0)[0])
+d.m['pca'].ae.model.fit(mit.first(d.train.batch(sum(d.select)))[0])
 
 d.m['ae1'] = d.fit(ae.AE(len(d.mat.colnames), 100, 'linear', 'linear', 'adam', 'mse'))
 d.m["ae1"].ae.model.fit(
     d.train.batch(sum(d.select)).repeat(),
     validation_data=d.test.batch(sum(~d.select)), validation_steps=1,
-    epochs=100, steps_per_epoch=1
+    epochs=10, steps_per_epoch=1
 )
 
 d.m['ae2'] = d.fit(ae.AE(len(d.mat.colnames), 100, 'relu', 'sigmoid', 'adam', 'binary_crossentropy'))

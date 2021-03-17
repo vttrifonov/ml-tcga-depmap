@@ -4,14 +4,25 @@ import tensorflow.keras as keras
 from tensorflow.keras import layers
 import tensorflow as tf
 
+class PCA:
+    def __init__(
+        self,
+        encoding_dim
+    ):
+        self.encoding_dim = encoding_dim
+
+        self.model = skld.PCA(n_components=encoding_dim)
+
+        self.encode = self.model.transform
+        self.decode = self.model.inverse_transform
+
 class AE:
     def __init__(
         self,
         input_dim, encoding_dim,
         encoder_activation,
         decoder_activation,
-        optim,
-        loss
+        optim, loss
     ):
         self.input_dim = input_dim
         self.encoding_dim = encoding_dim
@@ -35,18 +46,7 @@ class AE:
 
         self.encode = encoder.predict
         self.decode = decoder.predict
-        
-class PCA:
-    def __init__(
-        self,
-        encoding_dim
-    ):
-        self.encoding_dim = encoding_dim
 
-        self.model = skld.PCA(n_components=encoding_dim)
-
-        self.encode = self.model.transform
-        self.decode = self.model.inverse_transform
 
 class AE1:
     def __init__(
@@ -70,48 +70,7 @@ class AE1:
         decoder.add(layers.Dense(input_dim, activation='sigmoid'))
 
         autoencoder = keras.Model(encoder.input, decoder(encoder.output))
-
         autoencoder.compile(optimizer='adam', loss='binary_crossentropy')
-
-        self.model = autoencoder
-        self.encoder = encoder
-        self.decoder = decoder
-
-        self.encode = encoder.predict
-        self.decode = decoder.predict
-
-class AE2:
-    def __init__(
-        self,
-        input_shape
-    ):
-        self.input_shape = input_shape
-
-        encoder_input = keras.Input(shape=(np.prod(input_shape),))
-        x = layers.Reshape(target_shape=input_shape)(encoder_input)
-        x = layers.Conv2D(16, (3, 3), activation='relu', padding='same')(x)
-        x = layers.MaxPooling2D((2, 2), padding='same')(x)
-        x = layers.Conv2D(8, (3, 3), activation='relu', padding='same')(x)
-        x = layers.MaxPooling2D((2, 2), padding='same')(x)
-        x = layers.Conv2D(8, (3, 3), activation='relu', padding='same')(x)
-        x = layers.MaxPooling2D((2, 2), padding='same')(x)
-        encoder = keras.Model(encoder_input, x)
-
-        decoder_input = keras.Input(shape=encoder.output.shape[1:].as_list())
-        x = layers.Conv2D(8, (3, 3), activation='relu', padding='same')(decoder_input)
-        x = layers.UpSampling2D((2, 2))(x)
-        x = layers.Conv2D(8, (3, 3), activation='relu', padding='same')(x)
-        x = layers.UpSampling2D((2, 2))(x)
-        x = layers.Conv2D(16, (3, 3), activation='relu')(x)
-        x = layers.UpSampling2D((2, 2))(x)
-        x = layers.Conv2D(1, (3, 3), activation='sigmoid', padding='same')(x)
-        x = layers.Reshape(target_shape=(np.prod(input_shape),))(x)
-        decoder = keras.Model(decoder_input, x)
-
-        autoencoder_input = keras.Input(shape=(np.prod(input_shape),))
-        autoencoder = keras.Model(autoencoder_input, decoder(encoder(autoencoder_input)))
-
-        autoencoder.compile(optimizer=keras.optimizers.Adam(learning_rate=0.1, epsilon=1e-14), loss='binary_crossentropy')
 
         self.model = autoencoder
         self.encoder = encoder
@@ -145,7 +104,6 @@ class AE3:
         ])
 
         autoencoder = keras.Model(input, decoder(encoder.output))
-
         autoencoder.compile(optimizer='adam', loss='binary_crossentropy')
 
         self.model = autoencoder
@@ -226,39 +184,4 @@ class Data:
     def fit(self, ae, **kwargs):
         return self.Fit(self, ae, **kwargs)
     
-class MNIST(Data):
-    def __init__(self):
-        from keras.datasets import mnist
-        import numpy as np
-        (x_train, _), (x_test, _) = mnist.load_data()
-
-        x_train = x_train.astype('float32') / 255.
-        x_test = x_test.astype('float32') / 255.
-        x_train = x_train.reshape((len(x_train), np.prod(x_train.shape[1:])))
-        x_test = x_test.reshape((len(x_test), np.prod(x_test.shape[1:])))
-
-        self.train = x_train
-        self.test = x_test
-
-    class Fit(Data.Fit):
-        def plot(self):
-            import matplotlib.pyplot as plt
-
-            n = 10  # How many digits we will display
-            plt.figure(figsize=(20, 4))
-            for i in range(n):
-                # Display original
-                ax = plt.subplot(2, n, i + 1)
-                plt.imshow(self.data.test[i].reshape(28, 28))
-                plt.gray()
-                ax.get_xaxis().set_visible(False)
-                ax.get_yaxis().set_visible(False)
-
-                # Display reconstruction
-                ax = plt.subplot(2, n, i + 1 + n)
-                plt.imshow(self.decoded[i].reshape(28, 28))
-                plt.gray()
-                ax.get_xaxis().set_visible(False)
-                ax.get_yaxis().set_visible(False)
-            plt.show()
 
