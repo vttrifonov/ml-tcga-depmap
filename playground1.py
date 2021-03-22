@@ -10,13 +10,78 @@ import expr
 
 importlib.reload(expr)
 import expr
+from expr import sweep
 
 self = expr.expr
-files = self.files
-project_id = 'TCGA-COAD'
+
+def cap(l, h):
+    return lambda x: l if x<l else h if x>h else x
+
+files = self.files.sample(50)
+data = self.normalize(files)
+
+plt.hist(data.value, 200)
 
 
+def _():
+    import tensorflow as tf
+    import tensorflow.keras as keras
+    import tensorflow.keras.layers as layers
+    import scipy.sparse as sparse
 
+
+    x1 = np.random.randn(15).reshape(3, 5)
+    x2 = layers.Dense(5, kernel_initializer=keras.initializers.Constant(x1))
+    x6_1 = sparse.csr_matrix(
+        ([1, 2, 3], ([0, 0, 1], [0, 2, 1])),
+        shape=(2, 3)
+    )
+    def x6_2():
+        for i in range(x6_1.shape[0]):
+            r = x6_1[i,:]
+            yield (
+                np.array([r.indices]).T,
+                r.data,
+                [x6_1.shape[1]]
+            )
+    x6_3 = tf.data.Dataset.from_generator(x6_2, output_types=(tf.int64, tf.float64, tf.int64)).\
+        map(tf.SparseTensor).batch(2)
+
+    mit.first(x6_3).shape
+
+    x2(mit.first(x6_3)) - x6_1 @ x1
+
+def _():
+    def f1(data):
+        return pd.concat(data).groupby('Ensembl_Id').sum()
+
+    def f2(data):
+        return f1([data.set_index('Ensembl_Id').values])
+
+    files  = self.files
+
+    import time
+    t0 = time.time()
+    sweep(files[0:5000].id, f2, f1)
+    print(time.time()-t0)
+
+    d = pd.DataFrame({
+        'n': [1000, 1500, 2000, 3000, 3500, 4000, 5000],
+        't': [171,  187,  214,  250,  279, 313, 442]
+    })
+
+    import sklearn.linear_model as skllm
+
+    x1 = skllm.LinearRegression()
+    x2 = x1.fit(
+        np.array(d.n).reshape(-1, 1),
+        np.array(d.t).reshape(-1, 1)
+    )
+
+    x2.predict(np.array([[10000]]))
+
+    plt.scatter(d.n, d.t)
+    plt.scatter(d.n, x2.predict(np.array(d.n).reshape(-1, 1)))
 
 def _():
     x2 = self.genes.copy()
@@ -73,6 +138,9 @@ def _():
     import sklearn.preprocessing as sklp
     import sklearn.decomposition as skld
 
+    files = self.files
+    project_id = 'TCGA-COAD'
+
     f1 = files[files.project_id == project_id]
     f1 = f1[f1.workflow_type == 'HTSeq - FPKM']
     f1['col'] = range(f1.shape[0])
@@ -99,6 +167,9 @@ def _():
     plt.hist(x2_3[:, ~z2].flatten(), bins=100)
 
 def _():
+    files = self.files
+    project_id = 'TCGA-COAD'
+
     file = files[files.project_id == project_id].iloc[1]
 
     data = self.data(pd.DataFrame([file]))

@@ -7,8 +7,14 @@ from pathlib import Path
 cache = Dir(Path.home() / ".cache" / "ml-tcga-depmap")
 
 class SparseMat:
-    def __init__(self, i, j, v, rownames, colnames):
+    def __init__(self, i, j, v, rownames = None, colnames = None):
         import scipy.sparse as sparse
+
+        if rownames is None:
+            rownames = pd.Series(i).drop_duplicates()
+
+        if colnames is None:
+            colnames = pd.Series(j).drop_duplicates()
 
         self.rownames = rownames
         self.namerows = pd.Series(range(len(rownames)), index=rownames)
@@ -62,3 +68,31 @@ class SparseMat1:
             output_shapes=((self.m,), (self.m,)),
             output_types=(tf.float64, tf.float64)
         )
+
+    def sparse_tensor(self, names):
+        import tensorflow as tf
+        def map(i, v, s):
+            sparse = tf.SparseTensor(i, v, dense_shape=s)
+            sparse = tf.sparse.reorder(sparse)
+            return (sparse, tf.sparse.to_dense(sparse))
+        return tf.data.Dataset.from_generator(
+            lambda: ((
+                np.array([row.col]).T,
+                row.value,
+                [self.m]
+            ) for row in (self.sparse_row(name) for name in names)),
+            output_types=(tf.int64, tf.float64, tf.int64)
+        ).map(map)
+
+processes = 10
+def par_lapply(f):
+    import multiprocessing.pool as mp
+
+    global __f
+    def __f(x):
+        return f(x)
+
+    def lapply(l):
+        with mp.Pool(processes) as pool:
+            return pool.map(__f, l)
+    return lapply
