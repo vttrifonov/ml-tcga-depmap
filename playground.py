@@ -8,11 +8,12 @@ import more_itertools as mit
 import functools as ft
 import ae
 import analysis1
+from snv import snv
 importlib.reload(ae)
 importlib.reload(analysis1)
 import ae
 import analysis1
-from snv import snv
+
 
 def roc(obs, pred):
     from sklearn.metrics import roc_curve, auc
@@ -51,6 +52,31 @@ cases = cases[cases.project_id == 'TCGA-COAD'].case_id.reset_index(drop=True)
 
 d = a.snv_data(cases)
 d.m = {}
+
+def _():
+    import tensorflow as tf
+    import tensorflow.keras as keras
+    import tensorflow.keras.layers as layers
+    x1 = d.mat.sparse_tensor(d.cases[d.select])
+    x2 = d.mat.sparse_tensor(d.cases[~d.select])
+    x4 = keras.Sequential([
+        layers.Input((len(d.mat.colnames),)),
+        layers.Dense(100, activation='linear')
+    ])
+    x5 = keras.Sequential([
+        layers.Input((100,)),
+        layers.Dense(len(d.mat.colnames), activation='linear')
+    ])
+    x6 = keras.Model(x4.input, x5(x4.output))
+    def x7(y_obs, y_pred):
+        print("hi")
+        return keras.losses.mean_squared_error(y_obs, y_pred)
+    x6.compile(optimizer='adam', loss=x7)
+    x6.fit(
+        x1.batch(sum(d.select)).repeat(),
+        validation_data=x2.batch(sum(~d.select)), validation_steps=1,
+        epochs=10, steps_per_epoch=1
+    )
 
 d.m['pca'] = d.fit(ae.PCA(100))
 d.m['pca'].ae.model.fit(mit.first(d.train.batch(sum(d.select)))[0])
