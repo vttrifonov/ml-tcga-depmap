@@ -1,23 +1,10 @@
 import pandas as pd
-from common.defs import pipe, lfilter, lazy_method, lazy_property, lapply
-from common.dir import Dir, cached_property, cached_method
+from common.defs import pipe, lazy_method, lazy_property
+from common.dir import Dir, cached_property
 from gdc.expr import expr as _expr
-from helpers import SparseMat1, SparseMat, cache, par_lapply
+from helpers import SparseMat1, SparseMat, cache, map_reduce
 import numpy as np
-import sklearn.preprocessing as sklp
-import more_itertools as mit
 
-def sweep(files, map, reduce, batch1=1000, batch2=50):
-    return mit.chunked(files, batch1) |pipe|\
-        par_lapply(
-            lambda files:
-                mit.chunked(files, batch2) |pipe|\
-                    lapply(lapply(_expr.file_data)) |pipe|\
-                    lapply(pd.concat) |pipe|\
-                    lapply(map) |pipe|\
-                    reduce
-        ) |pipe|\
-        reduce
 
 class Expr:
     @lazy_property
@@ -41,6 +28,9 @@ class Expr:
             drop_duplicates(). \
             reset_index(drop=True)
 
+    def data(self, file):
+        return _expr.file_data(file)
+
     @lazy_property
     @cached_property(type=Dir.csv)
     def genes(self):
@@ -52,20 +42,16 @@ class Expr:
                 agg({'n': sum, 's': sum, 'ss': sum}).\
                 reset_index()
 
-        def map(data):
-            data = data.\
+        def map(file):
+            data = self.data(file).\
                 set_index('file_id').\
                 join(files)
             data['n'] = 1
             data['s'] = np.log2(data.value + 1e-3)
             data['ss'] = data.s ** 2
-            return reduce([data])
+            return data
 
-        return sweep(files.index, map, reduce)
-
-
-    def data(self, files):
-        return sweep(files.id, lambda x: x, pd.concat)
+        return list(files.index) |pipe| map_reduce(map, reduce)
 
     @lazy_property
     def normalization(self):
@@ -85,11 +71,11 @@ class Expr:
         genes.set_index(['project_id', 'sample_type', 'Ensembl_Id'], inplace=True)
         return genes
 
-    def normalize(self, files):
-        data = self.data(files).\
+    def normalized_data(self, file):
+        data = self.data(file).\
             set_index('file_id').\
             join(
-                files.\
+                self.files.\
                     rename(columns={'id': 'file_id'}).\
                     set_index('file_id')[['project_id', 'sample_type']]
             ).\

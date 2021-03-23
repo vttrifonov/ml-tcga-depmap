@@ -1,8 +1,9 @@
 import pandas as pd
-from common.defs import lazy_property
+from common.defs import lazy_property, pipe, lapply
 from common.dir import Dir
 import numpy as np
 from pathlib import Path
+import more_itertools as mit
 
 cache = Dir(Path.home() / ".cache" / "ml-tcga-depmap")
 
@@ -96,3 +97,45 @@ def par_lapply(f):
         with mp.Pool(processes) as pool:
             return pool.map(__f, l)
     return lapply
+
+def conc_lapply(threads, f):
+    import multiprocessing.pool as mp
+
+    global __f
+    def __f(x):
+        return f(x)
+
+    def lapply(l):
+        with mp.ThreadPool(threads) as pool:
+            return pool.map(__f, l)
+    return lapply
+
+
+def map_reduce(map, reduce, par_batch = None, conc_batch = None, conc_threads = 1):
+    def map_reduce(input):
+        nonlocal par_batch, conc_batch, conc_threads
+
+        if par_batch is None:
+            input = list(input)
+            par_batch = np.ceil(len(input) / processes)
+        if conc_batch is None:
+            conc_batch = par_batch
+        par_batch = int(par_batch)
+        conc_batch = int(conc_batch)
+
+        return mit.chunked(input, par_batch) |pipe|\
+            par_lapply(
+                lambda input:
+                    mit.chunked(input, conc_batch) |pipe|\
+                        conc_lapply(
+                            conc_threads,
+                            lambda input:
+                                input |pipe|\
+                                    lapply(map) |pipe|\
+                                    reduce
+                        ) |pipe|\
+                        reduce
+            ) |pipe|\
+            reduce
+
+    return map_reduce

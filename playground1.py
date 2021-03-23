@@ -10,18 +10,34 @@ import expr
 
 importlib.reload(expr)
 import expr
-from expr import sweep
+
 
 self = expr.expr
 
-def cap(l, h):
-    return lambda x: l if x<l else h if x>h else x
 
-files = self.files.sample(50)
-data = self.normalize(files)
+def _():
+    from helpers import map_reduce
 
-plt.hist(data.value, 200)
+    self.normalization
+    self.files
+    file = self.files.sample(10).id
+    from time import time
+    t0 = time()
+    data = list(file) |pipe|\
+        map_reduce(
+            map = (
+                lambda file:
+                    self.data(file).set_index('Ensembl_Id').join(
+                        self.normalized_data(file).set_index('Ensembl_Id'),
+                        lsuffix='_x',
+                        rsuffix='_y'
+                    )
+            ),
+            reduce = pd.concat
+        )
+    print(time() - t0)
 
+    plt.scatter(np.log2(data.value_x+1e-3), data.value_y)
 
 def _():
     import tensorflow as tf
