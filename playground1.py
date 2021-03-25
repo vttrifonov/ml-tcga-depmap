@@ -11,33 +11,70 @@ import expr
 importlib.reload(expr)
 import expr
 
-
 self = expr.expr
 
 
 def _():
-    from helpers import map_reduce
+    import multiprocessing as mp
+    import ctypes as ct
+    import numpy as np
 
-    self.normalization
-    self.files
-    file = self.files.sample(10).id
+    shared_array = None
+
+    def init(shared_array_base):
+        global shared_array
+        shared_array = np.ctypeslib.as_array(shared_array_base.get_obj())
+        shared_array = shared_array.reshape(10, 10)
+
+    # Parallel processing
+    def my_func(i):
+        shared_array[i, :] = i
+
+    shared_array_base = mp.Array(ct.c_double, 10 * 10)
+
+    pool = mp.Pool(processes=4, initializer=init, initargs=(shared_array_base,))
+    pool.map(my_func, range(10))
+
+    shared_array = np.ctypeslib.as_array(shared_array_base.get_obj())
+    shared_array = shared_array.reshape(10, 10)
+    print(shared_array)
+
+
+def _():
+    from helpers import map_reduce
     from time import time
+
+    self._normalize_all()
+    file = self.files.sample(1).id.iloc[0]
+    self.normalized_data(file)
+
+    mat = self.mat(self.gene_index.index)
+
     t0 = time()
-    data = list(file) |pipe|\
+    m = list(self.files.id) |pipe|\
         map_reduce(
-            map = (
-                lambda file:
-                    self.data(file).set_index('Ensembl_Id').join(
-                        self.normalized_data(file).set_index('Ensembl_Id'),
-                        lsuffix='_x',
-                        rsuffix='_y'
-                    )
-            ),
-            reduce = pd.concat
+            map = mat.dense_row,
+            reduce = list
         )
     print(time() - t0)
 
-    plt.scatter(np.log2(data.value_x+1e-3), data.value_y)
+    m.squeeze().reshape(100, 60483).shape
+
+    from time import time
+    t0 = time()
+    x = [mat.dense_row(name) for name in self.files.id]
+    print(time() - t0)
+
+    x = np.vstack(x)
+    import pickle
+    with open('tmp.1.pickle', "wb") as file:
+        pickle.dump(x, file)
+
+    t0 = time()
+    with open('tmp.1.pickle', "rb") as file:
+        x = pickle.load(file)
+    print(time() - t0)
+
 
 def _():
     import tensorflow as tf

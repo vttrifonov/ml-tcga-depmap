@@ -62,7 +62,7 @@ class SparseMat1:
             names, self.colnames
         )
 
-    def tensor(self, names):
+    def dense_tensor(self, names):
         import tensorflow as tf
         return tf.data.Dataset.from_generator(
             lambda: ((row, row) for row in (self.dense_row(name) for name in names)),
@@ -70,7 +70,7 @@ class SparseMat1:
             output_types=(tf.float64, tf.float64)
         )
 
-    def sparse_tensor(self, names):
+    def sparse_tensor1(self, names):
         import tensorflow as tf
         def map(i, v, s):
             sparse = tf.SparseTensor(i, v, dense_shape=s)

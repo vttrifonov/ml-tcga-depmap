@@ -1,6 +1,6 @@
 import pandas as pd
 from common.defs import pipe, lazy_method, lazy_property
-from common.dir import Dir, cached_property
+from common.dir import Dir, cached_property, cached_method
 from gdc.expr import expr as _expr
 from helpers import SparseMat1, SparseMat, cache, map_reduce
 import numpy as np
@@ -54,6 +54,11 @@ class Expr:
         return list(files.index) |pipe| map_reduce(map, reduce)
 
     @lazy_property
+    def gene_index(self):
+        genes = self.genes.Ensembl_Id.drop_duplicates().sort_values()
+        return pd.Series(range(len(genes)), index = genes)
+
+    @lazy_property
     def normalization(self):
         genes = self.genes.copy()
         genes['s'] /= genes.n  # mean
@@ -71,7 +76,7 @@ class Expr:
         genes.set_index(['project_id', 'sample_type', 'Ensembl_Id'], inplace=True)
         return genes
 
-    def normalized_data(self, file):
+    def normalized_data1(self, file):
         data = self.data(file).\
             set_index('file_id').\
             join(
@@ -87,6 +92,31 @@ class Expr:
         data['value'] -= data.t_s
         data['value'] /= data.se
         return data[['file_id', 'Ensembl_Id', 'value']]
+
+    @cached_method(type=Dir.pickle, key=lambda file: file)
+    def normalized_data(self, file):
+        data = self.normalized_data1(file).sort_values('Ensembl_Id').value
+        return np.float16(data)
+
+    def _normalize_all(self):
+        self.normalization
+        self.storage.child('normalized_data').exists
+        list(self.files.id) | pipe | \
+            map_reduce(
+                map=lambda file: (self.normalized_data(file), None)[1],
+                reduce=lambda _: (list(_), None)[1]
+            )
+
+    class Mat(SparseMat1):
+        def __init__(self, expr, genes):
+            super().__init__(genes)
+            self.expr = expr
+
+        def dense_row(self, name):
+            return self.expr.normalized_data(name)[self.expr.gene_index[self.colnames]]
+
+    def mat(self, genes):
+        return self.Mat(self, genes)
 
 
 expr = Expr()
