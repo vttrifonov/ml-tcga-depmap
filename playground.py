@@ -6,38 +6,15 @@ from common.defs import pipe, lapply, lfilter
 import seaborn as sb
 import more_itertools as mit
 import functools as ft
+import tensorflow as tf
 import ae
 import analysis1
 from snv import snv
+
 importlib.reload(ae)
 importlib.reload(analysis1)
 import ae
 import analysis1
-
-
-def roc(obs, pred):
-    from sklearn.metrics import roc_curve, auc
-    fpr, tpr, _ = roc_curve(obs, pred)
-    roc_auc = auc(fpr, tpr)
-    return fpr, tpr, roc_auc
-
-def plot_roc(obs, pred):
-    fpr, tpr, roc_auc = roc(obs, pred)
-
-    plt.figure()
-    lw = 2
-    plt.plot(
-        fpr, tpr,
-        color='darkorange',
-        lw=2, label=f'AUC = {roc_auc:.02f}'
-    )
-    plt.plot([0, 1], [0, 1], color='navy', lw=lw, linestyle='--')
-    plt.xlim([-0.01, 1.01])
-    plt.ylim([-0.01, 1.01])
-    plt.xlabel('FPR')
-    plt.ylabel('TPR')
-    plt.legend(loc="lower right")
-    plt.show()
 
 def m_aucs(data):
     return data |pipe|\
@@ -53,33 +30,8 @@ cases = cases[cases.project_id == 'TCGA-COAD'].case_id.reset_index(drop=True)
 d = a.snv_data(cases)
 d.m = {}
 
-def _():
-    import tensorflow as tf
-    import tensorflow.keras as keras
-    import tensorflow.keras.layers as layers
-    x1 = d.mat.sparse_tensor(d.cases[d.select])
-    x2 = d.mat.sparse_tensor(d.cases[~d.select])
-    x4 = keras.Sequential([
-        layers.Input((len(d.mat.colnames),)),
-        layers.Dense(100, activation='linear')
-    ])
-    x5 = keras.Sequential([
-        layers.Input((100,)),
-        layers.Dense(len(d.mat.colnames), activation='linear')
-    ])
-    x6 = keras.Model(x4.input, x5(x4.output))
-    def x7(y_obs, y_pred):
-        print("hi")
-        return keras.losses.mean_squared_error(y_obs, y_pred)
-    x6.compile(optimizer='adam', loss=x7)
-    x6.fit(
-        x1.batch(sum(d.select)).repeat(),
-        validation_data=x2.batch(sum(~d.select)), validation_steps=1,
-        epochs=10, steps_per_epoch=1
-    )
-
 d.m['pca'] = d.fit(ae.PCA(100))
-d.m['pca'].ae.model.fit(mit.first(d.train.batch(sum(d.select)))[0])
+d.m['pca'].ae.model.fit(tf.sparse.to_dense(mit.first(d.train.batch(sum(d.select)))[0]))
 
 d.m['ae1'] = d.fit(ae.AE(len(d.mat.colnames), 100, 'linear', 'linear', 'adam', 'mse'))
 d.m["ae1"].ae.model.fit(

@@ -2,7 +2,8 @@ import pandas as pd
 from common.defs import pipe, lfilter, lazy_method
 from common.dir import Dir, cached_property, cached_method
 from gdc.snv import snv as _snv
-from helpers import SparseMat1, cache
+from helpers import Mat2, cache
+import numpy as np
 
 class SNV:
     @property
@@ -54,7 +55,9 @@ class SNV:
         x2 = x2[['Entrez_Gene_Id']].drop_duplicates()
         return x2
 
-    class Mat(SparseMat1):
+    class Mat(Mat2):
+        default = np.int8(0)
+
         def __init__(self, snv, genes):
             super().__init__(genes)
             self.snv = snv
@@ -65,10 +68,15 @@ class SNV:
 
         def row_data(self, name):
             g = self.snv.case_data(name).Entrez_Gene_Id
-            return pd.DataFrame({'value': [1] * len(g)}, index=g)
+            return pd.DataFrame({'value': [1] * len(g)}, index=g).astype('int8')
+
+        def tensor(self, cases):
+            return self.sparse_tensor(cases)
 
     def mat(self, genes):
-        return self.Mat(self, genes)
+        mat = self.Mat(self, genes)
+        mat.rownames = self.cases.case_id
+        return mat
 
 snv = SNV()
 snv.storage = cache.child('snv')

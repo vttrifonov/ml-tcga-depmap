@@ -4,6 +4,7 @@ from common.dir import Dir
 import numpy as np
 from pathlib import Path
 import more_itertools as mit
+import matplotlib.pyplot as plt
 
 cache = Dir(Path.home() / ".cache" / "ml-tcga-depmap")
 
@@ -28,7 +29,32 @@ class SparseMat:
             shape=(len(rownames), len(colnames))
         )
 
-class SparseMat1:
+class Mat1:
+    def dense_tensor(self, names):
+        import tensorflow as tf
+        return tf.data.Dataset.from_generator(
+            lambda: ((row, row) for row in (self.dense_row(name) for name in names)),
+            output_shapes=((self.m,), (self.m,)),
+            output_types=(tf.float64, tf.float64)
+        )
+
+    @lazy_property
+    def dense(self):
+        return np.vstack([self.dense_row(name) for name in self.namerows.index])
+
+    @lazy_property
+    def namerows(self):
+        return pd.Series(
+            range(len(self.rownames)),
+            index=self.rownames
+        )
+
+    def dense_tensor1(self, names):
+        import tensorflow as tf
+        return tf.data.Dataset.from_tensor_slices(self.dense[self.namerows[names],:]). \
+            map(lambda row: (row, row))
+
+class Mat2(Mat1):
     default = 0
 
     def __init__(self, colnames):
@@ -50,8 +76,8 @@ class SparseMat1:
         return row
 
     def dense_row(self, name):
-        row = np.full((self.m,), self.default)
         data = self.sparse_row(name)
+        row = np.full((self.m,), self.default)
         row[data.col] = data.value
         return row
 
@@ -62,15 +88,7 @@ class SparseMat1:
             names, self.colnames
         )
 
-    def dense_tensor(self, names):
-        import tensorflow as tf
-        return tf.data.Dataset.from_generator(
-            lambda: ((row, row) for row in (self.dense_row(name) for name in names)),
-            output_shapes=((self.m,), (self.m,)),
-            output_types=(tf.float64, tf.float64)
-        )
-
-    def sparse_tensor1(self, names):
+    def sparse_tensor(self, names):
         import tensorflow as tf
         def map(i, v, s):
             sparse = tf.SparseTensor(i, v, dense_shape=s)
@@ -139,3 +157,28 @@ def map_reduce(map, reduce, par_batch = None, conc_batch = None, conc_threads = 
             reduce
 
     return map_reduce
+
+
+def roc(obs, pred):
+    from sklearn.metrics import roc_curve, auc
+    fpr, tpr, _ = roc_curve(obs, pred)
+    roc_auc = auc(fpr, tpr)
+    return fpr, tpr, roc_auc
+
+def plot_roc(obs, pred):
+    fpr, tpr, roc_auc = roc(obs, pred)
+
+    plt.figure()
+    lw = 2
+    plt.plot(
+        fpr, tpr,
+        color='darkorange',
+        lw=2, label=f'AUC = {roc_auc:.02f}'
+    )
+    plt.plot([0, 1], [0, 1], color='navy', lw=lw, linestyle='--')
+    plt.xlim([-0.01, 1.01])
+    plt.ylim([-0.01, 1.01])
+    plt.xlabel('FPR')
+    plt.ylabel('TPR')
+    plt.legend(loc="lower right")
+    plt.show()
