@@ -1,8 +1,8 @@
 import pandas as pd
-from common.defs import pipe, lazy_method, lazy_property
+from common.defs import pipe, lazy_property
 from common.dir import Dir, cached_property, cached_method
 from gdc.expr import expr as _expr
-from helpers import SparseMat1, SparseMat, cache, map_reduce
+from helpers import Mat1, cache, map_reduce
 import numpy as np
 
 
@@ -54,11 +54,6 @@ class Expr:
         return list(files.index) |pipe| map_reduce(map, reduce)
 
     @lazy_property
-    def gene_index(self):
-        genes = self.genes.Ensembl_Id.drop_duplicates().sort_values()
-        return pd.Series(range(len(genes)), index = genes)
-
-    @lazy_property
     def normalization(self):
         genes = self.genes.copy()
         genes['s'] /= genes.n  # mean
@@ -107,13 +102,53 @@ class Expr:
                 reduce=lambda _: (list(_), None)[1]
             )
 
-    class Mat(SparseMat1):
-        def __init__(self, expr, genes):
-            super().__init__(genes)
+    class FullMat(Mat1):
+        def __init__(self, expr):
             self.expr = expr
 
+        @lazy_property
+        def storage(self):
+            return self.expr.storage.child('full_mat')
+
+        @lazy_property
+        def rownames(self):
+            return self.expr.files.id.reset_index(drop=True)
+
+        @lazy_property
+        def colnames(self):
+            return  self.expr.genes.Ensembl_Id.drop_duplicates().sort_values().reset_index(drop=True)
+
         def dense_row(self, name):
-            return self.expr.normalized_data(name)[self.expr.gene_index[self.colnames]]
+            return self.expr.normalized_data(name)
+
+        @lazy_property
+        @cached_property(type=Dir.pickle)
+        def dense(self):
+            return super().dense
+
+    @lazy_property
+    def full_mat(self):
+        return self.FullMat(self)
+
+    class Mat(Mat1):
+        def __init__(self, expr, genes):
+            self.colnames = genes
+            self.expr = expr
+
+        @property
+        def rownames(self):
+            return self.expr.full_mat.rownames
+
+        @lazy_property
+        def dense(self):
+            full = self.expr.full_mat
+            return np.nan_to_num(full.dense)[:, full.namecols[self.colnames]]
+
+        def dense_row(self, name):
+            return self.dense[self.namerows[name],:]
+
+        def tensor(self, cases):
+            return self.dense_tensor1(cases)
 
     def mat(self, genes):
         return self.Mat(self, genes)
