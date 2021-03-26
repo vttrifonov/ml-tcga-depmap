@@ -8,28 +8,36 @@ import matplotlib.pyplot as plt
 
 cache = Dir(Path.home() / ".cache" / "ml-tcga-depmap")
 
+def rev_index(ds):
+    return pd.Series(ds.index, index=ds)
+
 class SparseMat:
     def __init__(self, i, j, v, rownames = None, colnames = None):
         import scipy.sparse as sparse
 
         if rownames is None:
-            rownames = pd.Series(i).drop_duplicates()
+            rownames = pd.Series(i).drop_duplicates().reset_index(drop=True)
 
         if colnames is None:
-            colnames = pd.Series(j).drop_duplicates()
+            colnames = pd.Series(j).drop_duplicates().reset_index(drop=True)
 
         self.rownames = rownames
-        self.namerows = pd.Series(range(len(rownames)), index=rownames)
-
         self.colnames = colnames
-        self.namecols = pd.Series(range(len(colnames)), index=colnames)
 
         self.mat = sparse.coo_matrix(
-            (v, (self.namerows[i], self.namecols[j])),
+            (v, (rev_index(self.rownames)[i], rev_index(self.colnames)[j])),
             shape=(len(rownames), len(colnames))
         )
 
 class Mat1:
+    @property
+    def namerows(self):
+        return rev_index(self.rownames)
+
+    @property
+    def namecols(self):
+        return rev_index(self.colnames)
+
     def dense_tensor(self, names):
         import tensorflow as tf
         return tf.data.Dataset.from_generator(
@@ -40,14 +48,7 @@ class Mat1:
 
     @lazy_property
     def dense(self):
-        return np.vstack([self.dense_row(name) for name in self.namerows.index])
-
-    @lazy_property
-    def namerows(self):
-        return pd.Series(
-            range(len(self.rownames)),
-            index=self.rownames
-        )
+        return np.vstack([self.dense_row(name) for name in self.rownames])
 
     def dense_tensor1(self, names):
         import tensorflow as tf
@@ -57,21 +58,12 @@ class Mat1:
 class Mat2(Mat1):
     default = 0
 
-    def __init__(self, colnames):
-        self.colnames = colnames
-
     @lazy_property
     def m(self):
         return len(self.colnames)
 
-    @lazy_property
-    def namecols(self):
-        return pd.DataFrame({
-            'col': range(len(self.colnames))
-        }, index=self.colnames)
-
     def sparse_row(self, name):
-        row = self.row_data(name).join(self.namecols)
+        row = self.row_data(name).join(pd.DataFrame({'col': self.namecols}))
         row['row'] = name
         return row
 

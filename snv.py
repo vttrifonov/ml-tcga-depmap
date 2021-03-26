@@ -1,8 +1,8 @@
 import pandas as pd
-from common.defs import pipe, lfilter, lazy_method
+from common.defs import pipe, lfilter, lazy_method, lazy_property
 from common.dir import Dir, cached_property, cached_method
 from gdc.snv import snv as _snv
-from helpers import Mat2, cache
+from helpers import Mat1, Mat2, cache
 import numpy as np
 
 class SNV:
@@ -55,12 +55,23 @@ class SNV:
         x2 = x2[['Entrez_Gene_Id']].drop_duplicates()
         return x2
 
-    class Mat(Mat2):
+    class FullMat(Mat2):
         default = np.int8(0)
 
-        def __init__(self, snv, genes):
-            super().__init__(genes)
+        def __init__(self, snv):
             self.snv = snv
+
+        @lazy_property
+        def storage(self):
+            return self.snv.storage.child('full_mat')
+
+        @lazy_property
+        def rownames(self):
+            return self.snv.cases.case_id.reset_index(drop=True)
+
+        @lazy_property
+        def colnames(self):
+            return self.snv.genes.Entrez_Gene_Id.reset_index(drop=True)
 
         @lazy_method(key=lambda name: name)
         def sparse_row(self, name):
@@ -70,13 +81,37 @@ class SNV:
             g = self.snv.case_data(name).Entrez_Gene_Id
             return pd.DataFrame({'value': [1] * len(g)}, index=g).astype('int8')
 
+        @lazy_property
+        @cached_property(type=Dir.pickle)
+        def dense(self):
+            return super().dense
+
+    @lazy_property
+    def full_mat(self):
+        return self.FullMat(self)
+
+    class Mat(Mat1):
+        def __init__(self, snv, genes):
+            self.colnames = genes
+            self.snv = snv
+
+        @property
+        def rownames(self):
+            return self.snv.full_mat.rownames
+
+        @property
+        def dense(self):
+            full = self.snv.full_mat
+            return full.dense[:, full.namecols[self.colnames]]
+
+        def dense_row(self, name):
+            return self.dense[self.namerows[name],:]
+
         def tensor(self, cases):
-            return self.sparse_tensor(cases)
+            return self.dense_tensor1(cases)
 
     def mat(self, genes):
-        mat = self.Mat(self, genes)
-        mat.rownames = self.cases.case_id
-        return mat
+        return self.Mat(self, genes)
 
 snv = SNV()
 snv.storage = cache.child('snv')

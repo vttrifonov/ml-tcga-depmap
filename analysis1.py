@@ -6,9 +6,9 @@ class Analysis1:
     class SNVData(ae.Data):
         def __init__(self, cases, genes):
             if cases is None:
-                cases = snv.cases.case_id
+                cases = snv.full_mat.rownames
             if genes is None:
-                genes = snv.genes.Entrez_Gene_Id
+                genes = snv.full_mat.colnames
 
             self.mat = snv.mat(genes)
 

@@ -17,6 +17,7 @@ import ae
 import analysis1
 
 def m_aucs(data):
+    from helpers import roc
     return data |pipe|\
         lfilter(lambda x: x[0].sum()>0) |pipe|\
         lapply(lambda x: roc(x[0][0, :], x[1][0,: ])[2]) |pipe| list
@@ -31,7 +32,7 @@ d = a.snv_data(cases)
 d.m = {}
 
 d.m['pca'] = d.fit(ae.PCA(100))
-d.m['pca'].ae.model.fit(tf.sparse.to_dense(mit.first(d.train.batch(sum(d.select)))[0]))
+d.m['pca'].ae.model.fit(mit.first(d.train.batch(sum(d.select)))[0])
 
 d.m['ae1'] = d.fit(ae.AE(len(d.mat.colnames), 100, 'linear', 'linear', 'adam', 'mse'))
 d.m["ae1"].ae.model.fit(
