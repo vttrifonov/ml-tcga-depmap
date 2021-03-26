@@ -104,6 +104,7 @@ class SNV:
             full = self.snv.full_mat
             return full.dense[:, full.namecols[self.colnames]]
 
+        @lazy_property
         def dense_row(self, name):
             return self.dense[self.namerows[name],:]
 
