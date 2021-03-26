@@ -55,6 +55,15 @@ class Mat1:
         return tf.data.Dataset.from_tensor_slices(self.dense[self.namerows[names],:]). \
             map(lambda row: (row, row))
 
+    @property
+    def xarray(self):
+        import xarray as xa
+        return xa.DataArray(
+            self.dense,
+            coords={'row': self.rownames, 'col': self.colnames},
+            dims=['row', 'col']
+        )
+
 class Mat2(Mat1):
     default = 0
 
