@@ -5,7 +5,6 @@ from gdc.expr import expr as _expr
 from helpers import Mat1, cache, map_reduce
 import numpy as np
 
-
 class Expr:
     @lazy_property
     def files(self):
