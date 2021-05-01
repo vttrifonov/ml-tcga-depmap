@@ -15,6 +15,7 @@ from common.dir import cached_property, Dir
 import itertools as it
 import numcodecs as nc
 from pathlib import Path
+import dask.array as daa
 
 def slice_iter(b, e, c):
     if b % c != 0:
@@ -41,20 +42,22 @@ class Mat:
     @lazy_property
     @cached_property(type=Dir.pickle)
     def rows(self):
-        def _rownames(files):
+        cols = self.cols.index
+
+        def _rownames(_range):
             rownames = set()
-            files = mit.chunked(files, 100)
-            for files1 in files:
-                data = (self.expr.data(file).Ensembl_Id for file in files1)
+            slices = slice_iter(_range.start, _range.stop, 10)
+            slices = it.islice(slices, 5)
+            for _slice in slices:
+                data = (self.expr.data(file).Ensembl_Id for file in cols[_slice])
                 data = pd.concat(data)
                 rownames.update(data)
             rownames = pd.Series(list(rownames))
             return rownames
 
-        genes = self.cols.index
-        genes = mit.chunked(genes, 1000)
-        genes = (delayed(_rownames)(files) for files in genes)
-        genes = Parallel(n_jobs=10, verbose=10)(genes)
+        ranges = slice_iter(0, len(cols), 1000)
+        ranges = (delayed(_rownames)(range) for range in ranges)
+        genes = Parallel(n_jobs=10, verbose=10)(ranges)
         genes = pd.concat(genes).drop_duplicates()
         genes = genes.sort_values().reset_index(drop=True)
         return genes
@@ -95,5 +98,13 @@ self = Mat(expr)
 
 self.rows
 
-self.zarr
+self.zarr.info
 
+x = daa.from_zarr(self.zarr)
+
+x1 = x.astype('float32').mean(axis=1).compute()
+x2 = x.astype('float32').var(axis=1).compute()
+
+plt.hist(np.log10(x2+10**(-0.5)), 100)
+
+np.vstack(np.unique(np.round(np.log10(x2+1e-10)), return_counts=True)).T
