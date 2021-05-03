@@ -183,3 +183,11 @@ def plot_roc(obs, pred):
     plt.ylabel('TPR')
     plt.legend(loc="lower right")
     plt.show()
+
+def slice_iter(b, e, c):
+    if b % c != 0:
+        b1 = c*np.ceil(b/c)
+        yield slice(b, b1)
+        b = b1
+    for i in range(b, e, c):
+        yield slice(i, min(i+c, e))

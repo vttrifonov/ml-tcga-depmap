@@ -2,8 +2,19 @@ import pandas as pd
 from common.defs import pipe, lazy_property
 from common.dir import Dir, cached_property, cached_method
 from gdc.expr import expr as _expr
-from helpers import Mat1, cache, map_reduce
+from helpers import Mat1, cache, map_reduce, slice_iter
 import numpy as np
+import zarr
+from joblib import Parallel, delayed
+from pathlib import Path
+import itertools as it
+import numcodecs as nc
+from pathlib import Path
+import dask.array as daa
+import dask_ml.preprocessing as dmlp
+import dask_ml.decomposition as dmld
+import xarray as xa
+import ensembl.sql.ensembl as ensembl
 
 class Expr:
     @lazy_property
@@ -151,6 +162,113 @@ class Expr:
 
     def mat(self, genes):
         return self.Mat(self, genes)
+
+    class Mat2:
+        def __init__(self, expr):
+            self.expr = expr
+
+        @lazy_property
+        def rows(self):
+            return self.expr.files.\
+                set_index('id').\
+                sort_values(['project_id', 'sample_type', 'is_normal'])
+
+        @lazy_property
+        @cached_property(type=Dir.pickle)
+        def cols(self):
+            rows = self.rows.index
+
+            def _colnames(_range):
+                colnames = set()
+                slices = slice_iter(_range.start, _range.stop, 100)
+                for _slice in slices:
+                    data = (self.expr.data(file).Ensembl_Id for file in rows[_slice])
+                    data = pd.concat(data)
+                    colnames.update(data)
+                colnames = pd.Series(list(colnames))
+                return colnames
+
+            ranges = slice_iter(0, len(rows), 1000)
+            ranges = (delayed(_colnames)(range) for range in ranges)
+            genes = Parallel(n_jobs=10, verbose=10)(ranges)
+            genes = pd.concat(genes).drop_duplicates()
+            genes = genes.sort_values().reset_index(drop=True)
+            return genes
+
+        @lazy_property
+        def col_gene(self):
+            result = pd.DataFrame()
+            result['col'] = self.cols
+            result['gene_id'] = result.col. \
+                str.replace('\\..*$', '', regex=True). \
+                str.replace('ENSGR', 'ENSG0', regex=True)
+            return result
+
+        @lazy_property
+        @cached_property(type=Dir.pickle)
+        def col_transcript(self):
+            col_gene = self.col_gene
+            gene_transcript = ensembl.query(ensembl.sql['gene_transcript'])
+            col_transcript = col_gene.set_index('gene_id').\
+                join(gene_transcript.set_index('gene_id'), how='inner')
+            col_transcript = col_transcript.reset_index(drop=True).drop_duplicates()
+            return col_transcript
+
+        @lazy_property
+        @cached_property(type=Dir.pickle)
+        def col_go(self):
+            col_transcript = self.col_transcript
+            transcript_go = ensembl.query(ensembl.sql['transcript_go'])
+            col_go = col_transcript.set_index('transcript_id').\
+                join(transcript_go.set_index('stable_id'), how='inner')
+            col_go = col_go.reset_index(drop=True).drop_duplicates()
+            return col_go
+
+        @lazy_property
+        def zarr(self):
+            cols = self.cols
+            cols = pd.Series(range(cols.shape[0]), index=cols)
+
+            rows = self.rows.index
+
+            path = Path(self.storage.child('data.zarr').path)
+            if not path.exists():
+                mat = zarr.open(
+                    str(path), mode='w',
+                    shape=(len(rows), len(cols)), dtype='float16',
+                    chunks=(1000, 1000),
+                    compressor=nc.Blosc(cname='zstd', clevel=3)
+                )
+                def _load_data(_range):
+                    slices = slice_iter(_range.start, _range.stop, 100)
+                    for _slice in slices:
+                        print(_slice.start)
+                        data = (np.log2(self.expr.data(file).set_index('Ensembl_Id').value+1e-3) for file in rows[_slice])
+                        data = (cols.align(data, join='left')[1] for data in data)
+                        data = pd.concat(data)
+                        data = np.array(data, dtype='float16')
+                        data = data.reshape((_slice.stop-_slice.start, -1))
+                        mat[:, _slice] = data
+
+                ranges = slice_iter(0, len(rows), 1000)
+                ranges = (delayed(_load_data)(range) for range in ranges)
+                Parallel(n_jobs=10, verbose=10)(ranges)
+
+            return zarr.open(str(path), mode='r')
+
+        @lazy_property
+        def xarray(self):
+            result = xa.Dataset()
+            result['data'] = (['rows', 'cols'], daa.from_zarr(self.zarr).astype('float32'))
+            result = result.merge(self.rows.rename_axis('rows'))
+            result['cols'] = np.array(self.cols)
+            return result
+
+    @lazy_property
+    def mat2(self):
+        mat = self.Mat2(self)
+        mat.storage = self.storage.child('mat2')
+        return mat
 
 
 expr = Expr()

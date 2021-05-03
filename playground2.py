@@ -2,109 +2,161 @@ import importlib
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from common.defs import pipe, lapply, lfilter
 import seaborn as sb
 import more_itertools as mit
+import itertools as it
 import functools as ft
-from expr import expr
+from pathlib import Path
 import zarr
 from joblib import Parallel, delayed
-from pathlib import Path
-from common.defs import lazy_property
-from common.dir import cached_property, Dir
-import itertools as it
-import numcodecs as nc
-from pathlib import Path
 import dask.array as daa
+import dask_ml.preprocessing as dmlp
+import dask_ml.decomposition as dmld
+import xarray as xa
+from expr import expr
+from types import SimpleNamespace
+from common.defs import lazy_property
+import types
+import tensorflow as tf
+import tensorflow.keras as tfk
 
-def slice_iter(b, e, c):
-    if b % c != 0:
-        b1 = c*np.ceil(b/c)
-        yield slice(b, b1)
-        b = b1
-    for i in range(b, e, c):
-        yield slice(i, min(i+c, e))
+import expr
+importlib.reload(expr)
+from expr import expr
+
+self = expr.mat2
+
+x1 = self.xarray
+x1['var'] = x1.data.var(axis=0).compute()
+x1['mean'] = x1.data.mean(axis=0).compute()
+
+plt.scatter(
+    x1['mean'],
+    np.log10(x1['var']+1e-10)
+)
+plt.gca().axvline(x=-7)
 
 class Mat:
-    def __init__(self, expr):
-        self.expr = expr
+    def __init__(self, data):
+        self.data = data
 
     @lazy_property
-    def storage(self):
-        return self.expr.storage.child('mat')
+    def ms(self):
+        return (self.data**2).mean().compute()
+
+class Fit:
+    def __init__(self, model, data):
+        self.model = model
+        self.data = data
 
     @lazy_property
-    def cols(self):
-        return self.expr.files.\
-            set_index('id').\
-            sort_values(['project_id', 'sample_type', 'is_normal'])
+    def fit(self):
+        return self.model.fit(self.data.train.data)
+
+    def transform1(self, data):
+        return self.fit.transform(data)
+
+    def transform2(self, data):
+        return self.fit.inverse_transform(self.fit.transform(data))
 
     @lazy_property
-    @cached_property(type=Dir.pickle)
-    def rows(self):
-        cols = self.cols.index
+    def transformed(self):
+        return SimpleNamespace(
+            train=Mat(self.transform(self.data.train.data)),
+            test=Mat(self.transform(self.data.test.data))
+        )
 
-        def _rownames(_range):
-            rownames = set()
-            slices = slice_iter(_range.start, _range.stop, 10)
-            slices = it.islice(slices, 5)
-            for _slice in slices:
-                data = (self.expr.data(file).Ensembl_Id for file in cols[_slice])
-                data = pd.concat(data)
-                rownames.update(data)
-            rownames = pd.Series(list(rownames))
-            return rownames
+def chunk_perm(chunks):
+    perm = np.cumsum(chunks)
+    perm = zip(np.hstack([0, perm[:-1]]), perm)
+    perm = [np.random.permutation(np.arange(x[0], x[1])) for x in perm]
+    perm = np.hstack(perm)
+    return perm
 
-        ranges = slice_iter(0, len(cols), 1000)
-        ranges = (delayed(_rownames)(range) for range in ranges)
-        genes = Parallel(n_jobs=10, verbose=10)(ranges)
-        genes = pd.concat(genes).drop_duplicates()
-        genes = genes.sort_values().reset_index(drop=True)
-        return genes
+#
 
-    @lazy_property
-    def zarr(self):
-        rows = self.rows
-        rows = pd.Series(range(rows.shape[0]), index=rows)
+data = x1.sel(cols=x1['mean']>(-7))
+data['train'] = ('rows', np.random.random(data.rows.shape)<0.7)
+data = SimpleNamespace(
+    train=Mat(data.sel(rows=data.train).data.data),
+    test=Mat(data.sel(rows=~data.train).data.data)
+)
+normalize = Fit(
+    dmlp.StandardScaler(),
+    data
+)
+normalize.transform = normalize.transform1
+pca = Fit(
+    dmld.PCA(n_components=3000),
+    normalize.transformed
+)
+pca.transform = pca.transform2
+pca.transformed.train.ms/pca.data.train.ms
+pca.transformed.test.ms/pca.data.test.ms
 
-        cols = self.cols.index
+#
 
-        path = Path(self.storage.child('data.zarr').path)
-        if not path.exists():
-            mat = zarr.open(
-                str(path), mode='w',
-                shape=(len(rows), len(cols)), dtype='float16',
-                chunks=(1000, 1000),
-                compressor=nc.Blosc(cname='zstd', clevel=3)
-            )
-            def _load_data(_range):
-                slices = slice_iter(_range.start, _range.stop, 100)
-                for _slice in slices:
-                    print(_slice.start)
-                    data = (np.log2(self.expr.data(file).set_index('Ensembl_Id').value+1e-3) for file in cols[_slice])
-                    data = (rows.align(data, join='left')[1] for data in data)
-                    data = pd.concat(data)
-                    data = np.array(data, dtype='float16')
-                    data = data.reshape((_slice.stop-_slice.start, -1))
-                    mat[:, _slice] = data.T
+x3_1 = self.col_go[['col', 'display_label']].\
+    drop_duplicates().\
+    set_index('display_label').col
+x3_2 = x3_1.reset_index().display_label.value_counts()
+x3_2 = x3_2[(x3_2>=10) & (x3_2<=700)].sort_values()
+x3_2
 
-            ranges = slice_iter(0, len(cols), 1000)
-            ranges = (delayed(_load_data)(range) for range in ranges)
-            Parallel(n_jobs=10, verbose=10)(ranges)
+x4_1 = x1.sel(cols=x1['mean']>(-7))
+x4_1['data'].data = dmlp.StandardScaler().fit_transform(x4_1.data.data)
+x4_2 = x4_1.cols.values
+x4_2 = x3_1[x3_1.isin(x4_2)]
 
-        return zarr.open(str(path), mode='r')
+x5_5 = set(x4_2['GO:0032886'])
+x5_3 = [x for x in x4_1.cols.values if x not in x5_5]
+x5_3 = x4_1.sel(cols=x5_3).data.data
+x5_1 = x4_1.sel(cols=list(x5_5)).data.data
+x5_1 = x5_1.rechunk((x5_1.chunks[0], x5_1.shape[1]))
+#x5_1 = x5_1[chunk_perm(x5_1.chunks[0]),:]
+x5_2 = daa.linalg.qr(x5_1)
+x5_3 = x5_1 @ daa.linalg.solve(x5_2[1], x5_2[0].T @ x5_3)
+(x5_3**2).mean().compute()
 
-self = Mat(expr)
+#
 
-self.rows
+x3_1 = self.col_go[['col', 'display_label']].\
+    drop_duplicates().\
+    set_index('display_label').col
+x3_2 = x3_1.reset_index().display_label.value_counts()
+x3_2 = x3_2[(x3_2>=10) & (x3_2<=700)].sort_values()
+x3_2 = x3_2.reset_index().reset_index().set_index('index').rename(columns={'level_0': 'i'})
 
-self.zarr.info
+x4_1 = x1.sel(cols=x1['mean']>(-7))
+x4_2 = x4_1.cols.values
+x4_2 = x3_1[x3_1.isin(x4_2)].reset_index().set_index('display_label')
+x4_2 = x4_2.join(x3_2, how='inner')
+x4_2 = x4_2.reset_index().set_index('col')
+x4_2 = x4_2.join(pd.Series(range(x4_1.cols.shape[0]), index=x4_1.cols.values, name='j'))
+x4_1 = x4_1.data.data
+x4_1 = dmlp.StandardScaler().fit_transform(x4_1)
 
-x = daa.from_zarr(self.zarr)
+x5_1 = tfk.layers.Input((x4_1.shape[1],))
+x5_2 = tf.SparseTensor(
+    indices=np.array(x4_2[['i', 'j']]),
+    values = tf.Variable(
+        initial_value = [0]*x4_2.shape[0],
+        dtype='float32'
+    ),
+    dense_shape=(x3_2.shape[0], x4_1.shape[1])
+)
+x5_2 = tf.sparse.sparse_dense_matmul(x5_2, tf.transpose(x5_1))
+x5_2 = tf.transpose(x5_2)
+x5_2 = tfk.layers.Dense(x4_1.shape[1])(x5_2)
+x5_3 = tfk.Model(inputs=x5_1, outputs=x5_2)
+x5_3.compile(optimizer='adam', loss='mean_squared_error')
 
-x1 = x.astype('float32').mean(axis=1).compute()
-x2 = x.astype('float32').var(axis=1).compute()
+x5_4 = x4_1[:100,:].compute()
+x5_4 = tf.data.Dataset.from_tensor_slices((x5_4, x5_4))
+x5_4 = x5_4.batch(10)
 
-plt.hist(np.log10(x2+10**(-0.5)), 100)
+x5_3.fit(x5_4, epochs=1, steps_per_epoch=10)
 
-np.vstack(np.unique(np.round(np.log10(x2+1e-10)), return_counts=True)).T
+(x5_3.predict(x5_4)**2).mean()
+
+(x5_4**2).mean()
