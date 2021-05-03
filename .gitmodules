@@ -10,3 +10,6 @@
 [submodule "ncbi"]
 	path = ncbi
 	url = ssh://git@github.com/vttrifonov/ncbi.git
+[submodule "ensembl"]
+	path = ensembl
+	url = ssh://git@github.com/vttrifonov/ensembl.git
