@@ -120,43 +120,120 @@ x5_3 = x5_1 @ daa.linalg.solve(x5_2[1], x5_2[0].T @ x5_3)
 
 #
 
-x3_1 = self.col_go[['col', 'display_label']].\
-    drop_duplicates().\
-    set_index('display_label').col
-x3_2 = x3_1.reset_index().display_label.value_counts()
-x3_2 = x3_2[(x3_2>=10) & (x3_2<=700)].sort_values()
-x3_2 = x3_2.reset_index().reset_index().set_index('index').rename(columns={'level_0': 'i'})
+
+class Sparse(tfk.layers.Layer):
+    def __init__(self, ij, dense_shape):
+        super().__init__()
+        v = self.add_weight(
+            name='sparse_kernel',
+            shape=(ij.shape[0],),
+            trainable=True
+        )
+        self.sparse_kernel = tf.SparseTensor(
+            indices=ij,
+            values=v,
+            dense_shape=dense_shape
+        )
+        self.sparse_kernel = tf.sparse.reorder(self.sparse_kernel)
+
+    def call(self, inputs):
+        outputs = tf.transpose(inputs)
+        outputs = tf.sparse.sparse_dense_matmul(self.sparse_kernel, outputs)
+        outputs = tf.transpose(outputs)
+        return outputs
+
+class Sparse1(tfk.layers.Layer):
+    def __init__(self, ij, dense_shape):
+        super().__init__()
+        self.sparse_kernel = self.add_weight(
+            name='sparse_kernel',
+            shape=dense_shape,
+            trainable=True
+        )
+
+    def call(self, inputs):
+        outputs = tf.transpose(inputs)
+        outputs = tf.linalg.matmul(self.sparse_kernel, outputs)
+        outputs = tf.transpose(outputs)
+        return outputs
+
+class Sparse2(tfk.layers.Layer):
+    def __init__(self, ij, dense_shape):
+        super().__init__()
+        self.sparse_kernel = self.add_weight(
+            name='sparse_kernel',
+            shape=(ij.shape[0],1),
+            trainable=True
+        )
+        self.dense_shape = dense_shape
+        u = np.unique(ij[:,0], return_index=True)
+        u = u[1][1:]
+        self.kj = list(zip(
+            np.split(np.arange(ij.shape[0]), u),
+            np.split(ij[:,1], u)
+        ))
+
+    def call(self, inputs):
+        outputs = [
+            tf.tensordot(tf.gather(inputs, j, axis=1), tf.gather(self.sparse_kernel, k, axis=0), 1)
+            for k, j in self.kj
+        ]
+        outputs = tf.concat(outputs, axis=1)
 
 x4_1 = x1.sel(cols=x1['mean']>(-7))
-x4_2 = x4_1.cols.values
-x4_2 = x3_1[x3_1.isin(x4_2)].reset_index().set_index('display_label')
-x4_2 = x4_2.join(x3_2, how='inner')
-x4_2 = x4_2.reset_index().set_index('col')
-x4_2 = x4_2.join(pd.Series(range(x4_1.cols.shape[0]), index=x4_1.cols.values, name='j'))
-x4_1 = x4_1.data.data
-x4_1 = dmlp.StandardScaler().fit_transform(x4_1)
+x4_4 = dmlp.StandardScaler().fit_transform(x4_1.data.data)
 
-x5_1 = tfk.layers.Input((x4_1.shape[1],))
-x5_2 = tf.SparseTensor(
-    indices=np.array(x4_2[['i', 'j']]),
-    values = tf.Variable(
-        initial_value = [0]*x4_2.shape[0],
-        dtype='float32'
-    ),
-    dense_shape=(x3_2.shape[0], x4_1.shape[1])
-)
-x5_2 = tf.sparse.sparse_dense_matmul(x5_2, tf.transpose(x5_1))
-x5_2 = tf.transpose(x5_2)
-x5_2 = tfk.layers.Dense(x4_1.shape[1])(x5_2)
-x5_3 = tfk.Model(inputs=x5_1, outputs=x5_2)
+x4_3 = self.col_go[['col', 'display_label']].drop_duplicates().set_index('col')
+x4_2 = pd.DataFrame({'col': x4_1.cols.values}).reset_index().rename(columns={'index': 'j'})
+x4_2 = x4_2.set_index('col').join(x4_3, how='inner').set_index('display_label')
+x4_3 = x4_2.index.value_counts()
+x4_3 = x4_3[(x4_3>=10) & (x4_3<=700)]
+#x4_3 = x4_3[x4_3.index=='GO:0048471']
+x4_3 = x4_3.reset_index().reset_index().set_index('index').rename(columns={'level_0': 'i'})[['i']]
+x4_2 = x4_2.join(x4_3, how='inner')
+x4_2 = x4_2[['i', 'j']].reset_index(drop=True).sort_values(['i', 'j'])
+
+
+x6_1 = Sparse2(np.array(x4_2), (x4_2.i.max()+1, x4_4.shape[1]))
+x6_2 = tfk.layers.Input((x4_4.shape[1],))
+x6_3 = [
+    tf.tensordot(tf.gather(x6_2, j, axis=1), tf.gather(x6_1.sparse_kernel, k, axis=0), 1)
+    for k, j in x6_1.kj
+]
+x6_4 = tf.concat(x6_3, axis=1)
+
+x5_3 = tfk.Sequential([
+    tfk.layers.InputLayer((x4_4.shape[1],)),
+    #Sparse(np.array(x4_2), (x4_2.i.max()+1, x4_4.shape[1])),
+    Sparse(np.vstack([[0]*x4_4.shape[1], np.arange(x4_4.shape[1])]).T, (1, x4_4.shape[1])),
+    tfk.layers.Dense(x4_4.shape[1])
+])
 x5_3.compile(optimizer='adam', loss='mean_squared_error')
+x5_3.summary()
 
-x5_4 = x4_1[:100,:].compute()
-x5_4 = tf.data.Dataset.from_tensor_slices((x5_4, x5_4))
-x5_4 = x5_4.batch(10)
+def chunk_iter(chunks):
+    chunks = np.cumsum(chunks)
+    chunks = zip(np.hstack([0, chunks[:-1]]), chunks)
+    for x in chunks:
+        yield slice(x[0], x[1])
 
-x5_3.fit(x5_4, epochs=1, steps_per_epoch=10)
+def x5_4_1():
+    for chunk in chunk_iter(x4_4.chunks[0]):
+        x = x4_4[chunk,:].compute()
+        for i in range(x.shape[0]):
+            yield x[i,:]
+
+x5_4 = tf.data.Dataset.from_generator(
+    lambda: ((row, row) for row in x5_4_1()),
+    output_types=(tf.float32, tf.float32),
+    output_shapes=((x4_4.shape[1],), (x4_4.shape[1],))
+)
+x5_4 = x5_4.batch(1000).repeat()
+
+x5_3.trainable_weights[0]
+x5_3.fit(x5_4, epochs=1, steps_per_epoch=3)
 
 (x5_3.predict(x5_4)**2).mean()
 
 (x5_4**2).mean()
+
