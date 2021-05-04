@@ -120,7 +120,6 @@ x5_3 = x5_1 @ daa.linalg.solve(x5_2[1], x5_2[0].T @ x5_3)
 
 #
 
-
 class Sparse(tfk.layers.Layer):
     def __init__(self, ij, dense_shape):
         super().__init__()
@@ -168,17 +167,60 @@ class Sparse2(tfk.layers.Layer):
         self.dense_shape = dense_shape
         u = np.unique(ij[:,0], return_index=True)
         u = u[1][1:]
-        self.kj = list(zip(
-            np.split(np.arange(ij.shape[0]), u),
-            np.split(ij[:,1], u)
-        ))
+        self.kj = (
+            tf.ragged.constant(np.split(np.arange(ij.shape[0]), u)),
+            tf.ragged.constant(np.split(ij[:,1], u))
+        )
 
     def call(self, inputs):
-        outputs = [
-            tf.tensordot(tf.gather(inputs, j, axis=1), tf.gather(self.sparse_kernel, k, axis=0), 1)
-            for k, j in self.kj
-        ]
-        outputs = tf.concat(outputs, axis=1)
+        def _mult(k, j):
+            input = tf.gather(inputs, j, axis=1)
+            kernel = tf.gather(self.sparse_kernel, k, axis=0)
+            result = tf.tensordot(input, kernel, 1)
+            return result
+
+        outputs = tf.map_fn(
+            lambda kj: _mult(*kj),
+            self.kj,
+            fn_output_signature=tf.float32
+        )
+        return outputs
+
+class Sparse3(tfk.layers.Layer):
+    def __init__(self, ij, dense_shape):
+        super().__init__()
+        self.sparse_kernel = self.add_weight(
+            name='sparse_kernel',
+            shape=(ij.shape[0],),
+            trainable=True
+        )
+        self.dense_shape = dense_shape
+        self.ids = tf.SparseTensor(
+            indices = ij,
+            values = np.arange(ij.shape[0]),
+            dense_shape=dense_shape
+        )
+        self.j = ij[:,1]
+
+
+    def call(self, inputs):
+        def _mult(input):
+            weights = tf.SparseTensor(
+                indices=self.ids.indices,
+                values=tf.gather(input, self.j, axis=0),
+                dense_shape=self.ids.dense_shape
+            )
+            outputs = tf.nn.embedding_lookup_sparse(
+                self.sparse_kernel,
+                sp_ids=self.ids,
+                sp_weights=weights,
+                combiner='sum'
+            )
+            print(outputs.shape)
+            return outputs
+
+        outputs = tf.map_fn(_mult, inputs)
+        return outputs
 
 x4_1 = x1.sel(cols=x1['mean']>(-7))
 x4_4 = dmlp.StandardScaler().fit_transform(x4_1.data.data)
@@ -188,24 +230,21 @@ x4_2 = pd.DataFrame({'col': x4_1.cols.values}).reset_index().rename(columns={'in
 x4_2 = x4_2.set_index('col').join(x4_3, how='inner').set_index('display_label')
 x4_3 = x4_2.index.value_counts()
 x4_3 = x4_3[(x4_3>=10) & (x4_3<=700)]
-#x4_3 = x4_3[x4_3.index=='GO:0048471']
+x4_3 = x4_3[x4_3.index.isin(['GO:0003149', 'GO:0033089'])]
 x4_3 = x4_3.reset_index().reset_index().set_index('index').rename(columns={'level_0': 'i'})[['i']]
 x4_2 = x4_2.join(x4_3, how='inner')
 x4_2 = x4_2[['i', 'j']].reset_index(drop=True).sort_values(['i', 'j'])
 
-
 x6_1 = Sparse2(np.array(x4_2), (x4_2.i.max()+1, x4_4.shape[1]))
-x6_2 = tfk.layers.Input((x4_4.shape[1],))
-x6_3 = [
-    tf.tensordot(tf.gather(x6_2, j, axis=1), tf.gather(x6_1.sparse_kernel, k, axis=0), 1)
-    for k, j in x6_1.kj
-]
-x6_4 = tf.concat(x6_3, axis=1)
+inputs = tfk.layers.Input(x4_4.shape[1])
+self = x6_1
+
+tf.map_fn(lambda x: (print(x[0].shape, x[1].shape), x)[1], x6_1.kj)
+
 
 x5_3 = tfk.Sequential([
     tfk.layers.InputLayer((x4_4.shape[1],)),
-    #Sparse(np.array(x4_2), (x4_2.i.max()+1, x4_4.shape[1])),
-    Sparse(np.vstack([[0]*x4_4.shape[1], np.arange(x4_4.shape[1])]).T, (1, x4_4.shape[1])),
+    Sparse(np.array(x4_2), (x4_2.i.max()+1, x4_4.shape[1])),
     tfk.layers.Dense(x4_4.shape[1])
 ])
 x5_3.compile(optimizer='adam', loss='mean_squared_error')
