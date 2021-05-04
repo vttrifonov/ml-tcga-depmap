@@ -5,8 +5,9 @@ import numpy as np
 from pathlib import Path
 import more_itertools as mit
 import matplotlib.pyplot as plt
+import os
 
-cache = Dir(Path.home() / ".cache" / "ml-tcga-depmap")
+cache = Dir(Path(os.environ['ML_TCGA_DEPMAP_CACHE'])) #Path.home() / ".cache" / "ml-tcga-depmap")
 
 def rev_index(ds):
     return pd.Series(ds.index, index=ds)
