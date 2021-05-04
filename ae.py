@@ -183,5 +183,32 @@ class Data:
 
     def fit(self, ae, **kwargs):
         return self.Fit(self, ae, **kwargs)
-    
+
+
+class Sparse(layers.Layer):
+    def __init__(self, ij):
+        super().__init__()
+        u = np.unique(ij[:,0], return_index=True)
+        u = u[1][1:]
+        self.kj = (
+            tf.ragged.constant(np.split(np.arange(ij.shape[0]), u)),
+            tf.ragged.constant(np.split(ij[:,1], u))
+         )
+        self.sparse_kernel = self.add_weight(
+            name='sparse_kernel',
+            shape=(ij.shape[0],1),
+            trainable=True
+        )
+
+    def call(self, inputs):
+        def _mult(k, j):
+            kernel = tf.gather(self.sparse_kernel, k, axis=0)
+            input = tf.gather(inputs, j, axis=1)
+            result = tf.tensordot(input, kernel, 1)
+            return result
+
+        outputs = tf.map_fn(lambda x: _mult(*x), self.kj, fn_output_signature=tf.float32)
+        outputs = tf.reshape(outputs, (self.kj[0].shape[0], tf.shape(inputs)[0]))
+        outputs = tf.transpose(outputs)
+        return outputs
 

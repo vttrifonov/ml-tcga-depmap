@@ -18,6 +18,7 @@ import ensembl.sql.ensembl as ensembl
 
 class Expr:
     @lazy_property
+    @cached_property(type=Dir.pickle)
     def files(self):
         import json
         m = _expr.manifest

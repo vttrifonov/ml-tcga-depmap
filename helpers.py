@@ -191,3 +191,17 @@ def slice_iter(b, e, c):
         b = b1
     for i in range(b, e, c):
         yield slice(i, min(i+c, e))
+
+def chunk_perm(chunks):
+    perm = np.cumsum(chunks)
+    perm = zip(np.hstack([0, perm[:-1]]), perm)
+    perm = [np.random.permutation(np.arange(x[0], x[1])) for x in perm]
+    perm = np.hstack(perm)
+    return perm
+
+def chunk_iter(chunks):
+    chunks = np.cumsum(chunks)
+    chunks = zip(np.hstack([0, chunks[:-1]]), chunks)
+    for x in chunks:
+        yield slice(x[0], x[1])
+

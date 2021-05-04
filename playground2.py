@@ -22,8 +22,11 @@ import tensorflow as tf
 import tensorflow.keras as tfk
 
 import expr
+import helpers
 importlib.reload(expr)
+importlib.reload(helpers)
 from expr import expr
+from helpers import chunk_perm, chunk_iter
 
 self = expr.mat2
 
@@ -66,19 +69,6 @@ class Fit:
             train=Mat(self.transform(self.data.train.data)),
             test=Mat(self.transform(self.data.test.data))
         )
-
-def chunk_perm(chunks):
-    perm = np.cumsum(chunks)
-    perm = zip(np.hstack([0, perm[:-1]]), perm)
-    perm = [np.random.permutation(np.arange(x[0], x[1])) for x in perm]
-    perm = np.hstack(perm)
-    return perm
-
-def chunk_iter(chunks):
-    chunks = np.cumsum(chunks)
-    chunks = zip(np.hstack([0, chunks[:-1]]), chunks)
-    for x in chunks:
-        yield slice(x[0], x[1])
 
 #
 
@@ -157,14 +147,17 @@ x4_5 = tf.data.Dataset.from_generator(_x4_5, output_types=x4_4.dtype, output_sha
 
 x5_3 = tfk.Sequential([
     tfk.layers.InputLayer((x4_4.shape[1],)),
-    #Sparse(np.array(x4_2)),
-    tfk.layers.Dense(x4_2.shape[0], use_bias=False),
+    Sparse(np.array(x4_2)),
+    #tfk.layers.Dense(x4_2.shape[0], use_bias=False),
     tfk.layers.Dense(x4_4.shape[1])
 ])
 x5_3.compile(optimizer='adam', loss='mse')
 x5_3.summary()
 
-x5_3.fit(x4_5, epochs=100, steps_per_epoch=12)
+x5_3.fit(x4_5, epochs=2, steps_per_epoch=12)
+
+from datetime import datetime
+x5_3.save(Path(self.storage.path)/'models'/datetime.now().strftime("%Y%m%d%H%M%S"))
 
 x5_5 = [
     daa.from_delayed(
@@ -190,8 +183,6 @@ x7_1 = x7_1.rechunk((x7_1.chunks[0], x7_1.shape[1]))
 x7_3 = daa.linalg.qr(x7_1)
 x7_3 = x7_1 @ daa.linalg.solve(x7_3[1], x7_3[0].T @ x7_2)
 ((x7_2-x7_3)**2).mean().compute()
-
-
 
 
 
