@@ -14,8 +14,10 @@ importlib.reload(expr)
 importlib.reload(helpers)
 importlib.reload(ae)
 from expr import expr
-from helpers import chunk_iter
+from helpers import chunk_iter, config
 from ae import Sparse
+
+config.exec()
 
 self = expr.mat2
 
