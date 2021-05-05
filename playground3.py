@@ -50,8 +50,8 @@ x4_5 = tf.data.Dataset.from_generator(_x4_5, output_types=x4_4.dtype, output_sha
 
 x5_3 = tfk.Sequential([
     tfk.layers.InputLayer((x4_4.shape[1],)),
-    Sparse(np.array(x4_2)),
-    #tfk.layers.Dense(x4_2.shape[0], use_bias=False),
+    #Sparse(np.array(x4_2)),
+    tfk.layers.Dense(x4_2.shape[0], use_bias=False),
     tfk.layers.Dense(x4_4.shape[1])
 ])
 x5_3.compile(optimizer='adam', loss='mse')

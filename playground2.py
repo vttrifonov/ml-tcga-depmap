@@ -14,12 +14,15 @@ import dask.array as daa
 import dask_ml.preprocessing as dmlp
 import dask_ml.decomposition as dmld
 import xarray as xa
-from expr import expr
 from types import SimpleNamespace
 from common.defs import lazy_property
 import types
 import tensorflow as tf
 import tensorflow.keras as tfk
+
+import os
+os.environ['ML_TCGA_DEPMAP_CACHE']=str(Path.home()/'.cache/ml-tcga-depmap')
+os.environ['GDC_CACHE']=str(Path.home()/'.cache/gdc')
 
 import expr
 import helpers
@@ -120,6 +123,55 @@ class Sparse(tfk.layers.Layer):
         outputs = tf.transpose(outputs)
         return outputs
 
+class Sparse1(tfk.layers.Layer):
+    def __init__(self, ij, dense_shape):
+        super().__init__()
+        self.ij = ij
+        self.dense_shape= dense_shape
+        self.kernel = self.add_weight(
+            name='sparse_kernel',
+            shape=(ij.shape[0],),
+            trainable=True
+        )
+
+    def call(self, inputs):
+        sparse = tf.SparseTensor(
+            indices = self.ij,
+            values = self.kernel,
+            dense_shape = self.dense_shape
+        )
+        outputs = tf.sparse.sparse_dense_matmul(sparse, inputs, adjoint_b=True)
+        outputs = tf.transpose(outputs)
+        return outputs
+
+class Sparse2(tfk.layers.Layer):
+    def __init__(self, ij, dense_shape):
+        super().__init__()
+        self.ij = ij
+        self.dense_shape= dense_shape
+        self.kernel = self.add_weight(
+            name='kernel',
+            shape=(ij.shape[0],),
+            trainable=True
+        )
+        self.ids = tf.SparseTensor(
+            indices = ij,
+            values = ij[:,1],
+            dense_shape = dense_shape
+        )
+
+    def call(self, inputs):
+        weights = tf.SparseTensor(
+            indices = self.ij,
+            values = self.kernel,
+            dense_shape = self.dense_shape
+        )
+        outputs = tf.transpose(inputs)
+        outputs = tf.nn.embedding_lookup_sparse(outputs, self.ids, weights, combiner='sum')
+        outputs = tf.transpose(outputs)
+        outputs = tf.reshape(outputs, (tf.shape(inputs)[0], self.dense_shape[0]))
+        return outputs
+
 x4_1 = x1.sel(cols=x1['mean']>(-7))
 x4_4 = dmlp.StandardScaler().fit_transform(x4_1.data.data)
 
@@ -130,7 +182,7 @@ x4_3 = x4_2.index.value_counts()
 x4_3 = x4_3[(x4_3>=10) & (x4_3<=700)]
 #x4_3 = x4_3[x4_3.index.isin(['GO:0048471','GO:0003149', 'GO:0033089'])]
 #x4_3 = x4_3[x4_3.index.isin(['GO:0003149', 'GO:0033089'])]
-x4_3 = x4_3[x4_3.index.isin(['GO:0048471'])]
+#x4_3 = x4_3[x4_3.index.isin(['GO:0048471'])]
 x4_3 = x4_3.reset_index().reset_index().set_index('index').rename(columns={'level_0': 'i'})[['i']]
 x4_2 = x4_2.join(x4_3, how='inner')
 x4_2 = x4_2[['i', 'j']].reset_index(drop=True).sort_values(['i', 'j'])
@@ -144,17 +196,18 @@ x4_5 = tf.data.Dataset.from_generator(_x4_5, output_types=x4_4.dtype, output_sha
     map(lambda row: (row, row)).\
     batch(1000).repeat()
 
-
 x5_3 = tfk.Sequential([
     tfk.layers.InputLayer((x4_4.shape[1],)),
-    Sparse(np.array(x4_2)),
+    #Sparse(np.array(x4_2)),
+    #Sparse1(np.array(x4_2), (max(x4_2.i)+1, x4_4.shape[1])),
+    Sparse2(np.array(x4_2), (max(x4_2.i)+1, x4_4.shape[1])),
     #tfk.layers.Dense(x4_2.shape[0], use_bias=False),
     tfk.layers.Dense(x4_4.shape[1])
 ])
 x5_3.compile(optimizer='adam', loss='mse')
 x5_3.summary()
 
-x5_3.fit(x4_5, epochs=2, steps_per_epoch=12)
+x5_3.fit(x4_5, epochs=10, steps_per_epoch=12)
 
 from datetime import datetime
 x5_3.save(Path(self.storage.path)/'models'/datetime.now().strftime("%Y%m%d%H%M%S"))
