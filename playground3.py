@@ -15,7 +15,7 @@ importlib.reload(helpers)
 importlib.reload(ae)
 from expr import expr
 from helpers import chunk_iter, config
-from ae import Sparse
+from ae import Sparse1
 
 config.exec()
 
@@ -52,8 +52,8 @@ x4_5 = tf.data.Dataset.from_generator(_x4_5, output_types=x4_4.dtype, output_sha
 
 x5_3 = tfk.Sequential([
     tfk.layers.InputLayer((x4_4.shape[1],)),
-    #Sparse(np.array(x4_2)),
-    tfk.layers.Dense(x4_2.shape[0], use_bias=False),
+    Sparse1(np.array(x4_2), (max(x4_2.i)+1, x4_4.shape[1])),
+    #tfk.layers.Dense(x4_2.shape[0], use_bias=False),
     tfk.layers.Dense(x4_4.shape[1])
 ])
 x5_3.compile(optimizer='adam', loss='mse')
