@@ -3,3 +3,4 @@ env
 .cache
 __pycache__
 env.yml
+*~
