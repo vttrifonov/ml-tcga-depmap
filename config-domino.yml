@@ -1,0 +1,2 @@
+ML_TCGA_DEPMAP_CACHE: '/mnt/.cache/ml-tcga-depmap'
+GDC_CACHE: '/mnt/.cache/gdc_cache'
