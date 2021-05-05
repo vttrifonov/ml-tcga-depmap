@@ -1,0 +1,26 @@
+#!/bin/bash
+
+pathadd() {
+    path=$1
+    arg=$2
+    if [ -d "$arg" ] && [[ ":$path:" != *":$arg:"* ]]; then
+	path="$arg${path:+":$path"}"
+    fi
+    echo $path
+}
+
+eval $(/home/vtrifono/.linuxbrew/bin/brew shellenv)
+. ~/.conda-init
+
+module load cpu/0.15.4
+module load gcc/9.2.0
+
+conda activate ./env
+
+export GDC_CACHE=~/projects/.cache/gdc
+export ML_TCGA_DEPMAP_CACHE=~/projects/.cache/ml-tcga-depmap
+
+#PATH=$(pathadd $PATH ~/bin)
+#LD_LIBRARY_PATH=$(pathadd $LD_LIBRARY_PATH ~/lib)
+
+
