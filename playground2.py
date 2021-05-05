@@ -20,16 +20,12 @@ import types
 import tensorflow as tf
 import tensorflow.keras as tfk
 
-import os
-os.environ['ML_TCGA_DEPMAP_CACHE']=str(Path.home()/'.cache/ml-tcga-depmap')
-os.environ['GDC_CACHE']=str(Path.home()/'.cache/gdc')
-
 import expr
 import helpers
 importlib.reload(expr)
 importlib.reload(helpers)
 from expr import expr
-from helpers import chunk_perm, chunk_iter
+from helpers import chunk_perm, chunk_iter, config
 
 self = expr.mat2
 
@@ -199,8 +195,8 @@ x4_5 = tf.data.Dataset.from_generator(_x4_5, output_types=x4_4.dtype, output_sha
 x5_3 = tfk.Sequential([
     tfk.layers.InputLayer((x4_4.shape[1],)),
     #Sparse(np.array(x4_2)),
-    #Sparse1(np.array(x4_2), (max(x4_2.i)+1, x4_4.shape[1])),
-    Sparse2(np.array(x4_2), (max(x4_2.i)+1, x4_4.shape[1])),
+    Sparse1(np.array(x4_2), (max(x4_2.i)+1, x4_4.shape[1])),
+    #Sparse2(np.array(x4_2), (max(x4_2.i)+1, x4_4.shape[1])),
     #tfk.layers.Dense(x4_2.shape[0], use_bias=False),
     tfk.layers.Dense(x4_4.shape[1])
 ])

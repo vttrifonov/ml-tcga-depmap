@@ -6,8 +6,21 @@ from pathlib import Path
 import more_itertools as mit
 import matplotlib.pyplot as plt
 import os
+import yaml
 
-cache = Dir(Path(os.environ['ML_TCGA_DEPMAP_CACHE'])) #Path.home() / ".cache" / "ml-tcga-depmap")
+class Config:
+    def exec(self):
+        with open("config.yml", "r") as config:
+            cfg = yaml.load(config, Loader=yaml.FullLoader)
+        for key, value in cfg.items():
+            os.environ[key] = value
+
+    @lazy_property
+    def cache(self):
+        self.exec()
+        return Dir(Path(os.environ['ML_TCGA_DEPMAP_CACHE']))
+
+config = Config()
 
 def rev_index(ds):
     return pd.Series(ds.index, index=ds)

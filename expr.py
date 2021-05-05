@@ -2,7 +2,7 @@ import pandas as pd
 from common.defs import pipe, lazy_property
 from common.dir import Dir, cached_property, cached_method
 from gdc.expr import expr as _expr
-from helpers import Mat1, cache, map_reduce, slice_iter
+from helpers import Mat1, map_reduce, slice_iter, config
 import numpy as np
 import zarr
 from joblib import Parallel, delayed
@@ -273,6 +273,6 @@ class Expr:
 
 
 expr = Expr()
-expr.storage = cache.child('expr')
+expr.storage = config.cache.child('expr')
 
 
