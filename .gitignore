@@ -5,3 +5,6 @@ __pycache__
 env.yml
 .vscode
 *~
+.domino
+domino.log
+results
