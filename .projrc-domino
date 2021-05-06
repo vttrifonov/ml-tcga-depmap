@@ -34,14 +34,23 @@ pip install --user -r requirements-domino.txt
 rm -f config.yml
 ln -s config-domino.yml config.yml
 
-rm -f .cache
-ln -s /domino/datasets/vtrifono/ml-tcga-depmap/scratch .cache
+rm -rf .cache
+scratch=/domino/datasets/vtrifono/ml-tcga-depmap/scratch
+if [ -d $scratch ]
+then 
+    echo Attaching scratch...
+    ln -s $scratch .cache
 
-rm -f .vscode
-ln -s .cache/.vscode .vscode
+    rm -f .vscode
+    ln -s .cache/.vscode .vscode
 
-rm -f vscode-settings
-ln -s .cache/vscode-settings vscode-settings
+    rm -f vscode-settings
+    ln -s .cache/vscode-settings vscode-settings
+else
+    cache=/domino/datasets/cache
+    [ ! -d $cache ] && echo "No cache" && exit 1
+    ln -s $cache .cache
+fi
 
 
 
