@@ -6,6 +6,7 @@ import ae_expr as ae
 config.exec()
 
 storage = Path(config.cache/'playground2')
+storage.mkdir(parents=True)
 
 model1 = ae.model1()
 model1.data =  ae.data1()
