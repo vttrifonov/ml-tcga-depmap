@@ -117,9 +117,9 @@ class data1(_data):
 
         data2 = self.data2
         data3 = SimpleNamespace(
-            Xy = [_ds(data2.train).batch(800).repeat()],
+            Xy = [_ds(data2.train).batch(800).prefetch(2).repeat()],
             kwargs = dict(
-                validation_data = _ds(data2.test).batch(200),
+                validation_data = _ds(data2.test).batch(200).prefetch(2),
                 validation_steps = 12,
                 steps_per_epoch = 12
             )

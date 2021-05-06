@@ -10,3 +10,6 @@ datasetConfigurations:
    inputs:
      - path: "cache"
        dataset: "cache"
+   outputs:
+     - path: "output"
+       dataset: "output"

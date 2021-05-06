@@ -9,7 +9,7 @@ import sys
 
 config.exec()
 
-storage = Path('results/expr/ae-fit')
+storage = Path('output/expr/ae-fit')
 storage.mkdir(parents=True)
 
 models = {

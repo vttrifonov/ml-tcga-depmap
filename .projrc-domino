@@ -35,6 +35,7 @@ rm -f config.yml
 ln -s config-domino.yml config.yml
 
 rm -rf .cache
+rm -rf output
 scratch=/domino/datasets/vtrifono/ml-tcga-depmap/scratch
 if [ -d $scratch ]
 then 
@@ -46,10 +47,14 @@ then
 
     rm -f vscode-settings
     ln -s .cache/vscode-settings vscode-settings
+    
+    ln -s .cache output
 else
     cache=/domino/datasets/cache
-    [ ! -d $cache ] && echo "No cache" && exit 1
-    ln -s $cache .cache
+    output=/domino/datasets/output
+    
+    [ -d $cache ] && ln -s $cache .cache
+    [ -d $output ] && ln -s $output output
 fi
 
 
