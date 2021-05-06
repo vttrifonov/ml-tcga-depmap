@@ -1,3 +1,8 @@
+# Domino
+domino.log
+dominodump-*
+results/run-*/
+
 env
 .cache
 .idea
