@@ -19,7 +19,7 @@ import ensembl.sql.ensembl as ensembl
 class Expr:
     @lazy_property
     def storage(self):
-        return config.cache.child('expr')
+        return Dir(config.cache/'expr')
 
     @lazy_property
     @cached_property(type=Dir.pickle)
@@ -275,8 +275,5 @@ class Expr:
         mat.storage = self.storage.child('mat2')
         return mat
 
-
 expr = Expr()
-
-
 
