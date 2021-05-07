@@ -9,10 +9,10 @@ storage = Path('output/playground2')
 storage.mkdir(parents=True, exist_ok=True)
 
 model1 = ae.model1()
-model1.data =  ae.data1()
+model1.data =  ae.data2()
 model1.data.storage = Dir(storage/'data')
 model1.storage = Path(model1.data.storage.path)/'model1'
-model1.fit(epochs=1)
+model1.fit(epochs=50)
 
 model2 = ae.model2()
 model2.data =  ae.data1()
