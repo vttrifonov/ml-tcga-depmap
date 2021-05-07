@@ -27,6 +27,8 @@ importlib.reload(helpers)
 from expr import expr
 from helpers import chunk_perm, chunk_iter, config
 
+config.exec()
+
 self = expr.mat2
 
 x1 = self.xarray

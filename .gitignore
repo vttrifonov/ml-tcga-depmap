@@ -8,3 +8,6 @@ env.yml
 .domino
 domino.log
 results
+.ipynb_checkpoints
+.Trash*
+output

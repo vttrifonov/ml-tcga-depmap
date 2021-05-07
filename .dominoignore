@@ -10,3 +10,6 @@ env
 __pycache__
 vscode-settings
 .empty
+.ipynb_checkpoints
+.Trash*
+output
