@@ -10,6 +10,9 @@ import dask.array as daa
 from expr import expr
 from helpers import chunk_iter
 from ae import Sparse1
+import pickle
+import datetime
+import json
 
 class _data:
     @property
@@ -68,7 +71,7 @@ class _data:
     @lazy_property
     def ij(self):
         x4_1 = self.data2
-        
+
         x4_3 = self.data1.col_go[['col', 'display_label']].rename(columns={'display_label': 'go'}).drop_duplicates()
         x4_2 = pd.DataFrame({'col': x4_1.cols})
         x4_2['j'] = range(x4_2.shape[0])
@@ -84,23 +87,44 @@ class _data:
 class _fit:
     kwargs = {}
 
+    @property
+    def cp_callback(self):
+        callback = tfk.callbacks.ModelCheckpoint(
+            filepath=self.storage,
+            **self.kwargs.get('cp_callback', {})
+        )
+        return callback
+
     @lazy_property
     def model(self):
         if self.storage.exists():
+            print(f'loading model from {self.storage}')
             model = tfk.models.load_model(self.storage)
             return model
         model = self.build()
+        print(f'saving model to {self.storage}')
         model.save(self.storage)
         return model
 
     def fit(self, **kwargs):
         model = self.model
-        fit = model.fit(
+        history = model.fit(
             *self.data.data.Xy,
-            **{**self.data.data.kwargs, **self.kwargs, **kwargs}
+            **{
+                **self.kwargs.get('fit', {}),
+                'callbacks': [self.cp_callback],
+                **self.data.data.kwargs,
+                **kwargs
+            }
         )
+        history_file = self.storage / 'history'
+        history_file.mkdir(parents=True, exist_ok=True)
+        history_file = history_file/datetime.datetime.now().strftime('%Y%m%d%H%M%S.json')
+        print(f'saving history to {history_file}')
+        with open(history_file, 'wt') as file:
+            json.dump(history.history, file)
+        print(f'saving model to {self.storage}')
         model.save(self.storage)
-        return fit
 
 class data1(_data):
     @lazy_property

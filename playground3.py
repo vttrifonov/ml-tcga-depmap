@@ -1,25 +1,32 @@
 from pathlib import Path
 from common.dir import Dir
 from helpers import config
+import shutil
+import importlib
+
+import ae_expr
+importlib.reload(ae_expr)
 import ae_expr as ae
+
 
 config.exec()
 
 storage = Path('output/playground2')
+#shutil.rmtree(storage)
 storage.mkdir(parents=True, exist_ok=True)
 
 model1 = ae.model1()
 model1.data =  ae.data2()
+model1.kwargs = {'cp_callback': {'save_freq': 3, 'verbose': 1}}
 model1.data.storage = Dir(storage/'data')
 model1.storage = Path(model1.data.storage.path)/'model1'
-model1.fit(epochs=50)
+model1.fit(epochs=1, steps_per_epoch=6)
 
 model2 = ae.model2()
 model2.data =  ae.data1()
 model2.data.storage = Dir(storage/'data')
 model2.storage = Path(model2.data.storage.path)/'model2'
 model2.fit(epochs=100)
-
 
 import numpy as np
 import pandas as pd
