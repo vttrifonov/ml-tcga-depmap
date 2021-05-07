@@ -192,7 +192,7 @@ class model2(_fit):
 class model3(_fit):
     def build(self):
         ij = self.data.ij
-        ij['j'] = np.random.permutation(j)
+        ij['j'] = np.random.permutation(ij.j)
         model = tfk.Sequential([
             tfk.layers.InputLayer((self.data.num_cols,)),
             Sparse1(np.array(ij), (max(ij.i)+1, self.data.num_cols)),
