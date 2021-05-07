@@ -68,13 +68,16 @@ class _data:
     @lazy_property
     def ij(self):
         x4_1 = self.data2
-        x4_3 = self.data1.col_go[['col', 'display_label']].drop_duplicates().set_index('col')
-        x4_2 = pd.DataFrame({'col': x4_1.cols}).reset_index().rename(columns={'index': 'j'})
-        x4_2 = x4_2.set_index('col').join(x4_3, how='inner').set_index('display_label')
+        
+        x4_3 = self.data1.col_go[['col', 'display_label']].rename(columns={'display_label': 'go'}).drop_duplicates()
+        x4_2 = pd.DataFrame({'col': x4_1.cols})
+        x4_2['j'] = range(x4_2.shape[0])
+        x4_2 = x4_2.set_index('col').join(x4_3.set_index('col'), how='inner').set_index('go')
         x4_3 = x4_2.index.value_counts()
-        x4_3 = x4_3[(x4_3>=10) & (x4_3<=700)]
-        x4_3 = x4_3.reset_index().reset_index().set_index('index').rename(columns={'level_0': 'i'})[['i']]
-        x4_2 = x4_2.join(x4_3, how='inner')
+        x4_3 = x4_3[(x4_3 >= 10) & (x4_3 <= 700)]
+        x4_3 = x4_3.to_frame()
+        x4_3['i'] = range(x4_3.shape[0])
+        x4_2 = x4_2.join(x4_3.i, how='inner')
         x4_2 = x4_2[['i', 'j']].reset_index(drop=True).sort_values(['i', 'j'])
         return x4_2
 
