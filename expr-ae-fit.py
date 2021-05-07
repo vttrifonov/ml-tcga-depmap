@@ -21,8 +21,8 @@ model_name = sys.argv[1]
 epochs = int(sys.argv[2])
 
 model = models[model_name]()
-model.data =  ae.data2()
 model.kwargs = {'cp_callback': {'save_freq': 12, 'verbose': 1}}
+model.data =  ae.data2()
 model.data.storage = Dir(storage/'data')
 model.storage = Path(model.data.storage.path)/model_name
 model.fit(epochs=epochs)
