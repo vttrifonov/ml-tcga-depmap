@@ -10,7 +10,6 @@ import dask.array as daa
 from expr import expr
 from helpers import chunk_iter
 from ae import Sparse1
-import pickle
 import datetime
 import json
 
@@ -189,4 +188,18 @@ class model2(_fit):
         ])
         model.compile(optimizer='adam', loss='mse')
         return model
+
+class model3(_fit):
+    def build(self):
+        ij = self.data.ij
+        ij['j'] = np.random.permutation(j)
+        model = tfk.Sequential([
+            tfk.layers.InputLayer((self.data.num_cols,)),
+            Sparse1(np.array(ij), (max(ij.i)+1, self.data.num_cols)),
+            tfk.layers.Dense(self.data.num_cols)
+        ])
+        model.compile(optimizer='adam', loss='mse')
+        return model
+
+
 
