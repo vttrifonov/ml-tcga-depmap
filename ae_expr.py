@@ -191,7 +191,7 @@ class model2(_fit):
 
 class model3(_fit):
     def build(self):
-        ij = self.data.ij
+        ij = self.data.ij.copy()
         ij['j'] = np.random.permutation(ij.j)
         model = tfk.Sequential([
             tfk.layers.InputLayer((self.data.num_cols,)),

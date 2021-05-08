@@ -1,33 +1,6 @@
 from pathlib import Path
-from common.dir import Dir
-from helpers import config
 import shutil
 import importlib
-
-import ae_expr
-importlib.reload(ae_expr)
-import ae_expr as ae
-
-
-config.exec()
-
-storage = Path('output/playground2')
-#shutil.rmtree(storage)
-storage.mkdir(parents=True, exist_ok=True)
-
-model1 = ae.model1()
-model1.data =  ae.data2()
-model1.kwargs = {'cp_callback': {'save_freq': 3, 'verbose': 1}}
-model1.data.storage = Dir(storage/'data')
-model1.storage = Path(model1.data.storage.path)/'model1'
-model1.fit(epochs=1, steps_per_epoch=6)
-
-model2 = ae.model2()
-model2.data =  ae.data1()
-model2.data.storage = Dir(storage/'data')
-model2.storage = Path(model2.data.storage.path)/'model2'
-model2.fit(epochs=100)
-
 import numpy as np
 import pandas as pd
 import dask_ml.preprocessing as dmlp
@@ -39,12 +12,27 @@ from common.dir import Dir, cached_property
 from types import SimpleNamespace
 import dask.array as daa
 from expr import expr
-from helpers import chunk_iter
-from ae import Sparse1
+from helpers import chunk_iter, config
 import xarray as xa
 import itertools as it
-import shutil
 import matplotlib.pyplot as plt
+
+import ae_expr
+importlib.reload(ae_expr)
+import ae_expr as ae
+
+config.exec()
+
+storage = Path('output/playground2')
+#shutil.rmtree(storage)
+storage.mkdir(parents=True, exist_ok=True)
+
+model = ae.model3()
+model.data =  ae.data2()
+model.kwargs = {'cp_callback': {'save_freq': 121, 'verbose': 1}}
+model.data.storage = Dir(storage/'data')
+model.storage = Path(model.data.storage.path)/'model3'
+model.fit(epochs=100, steps_per_epoch=12)
 
 class _data(ae.data1):
     @property
@@ -121,27 +109,13 @@ class _data(ae.data1):
         )
         return data4
 
-model1 = ae.model1()
-model1.data = _data()
-model1.data.storage = Dir(storage/'_data')
-model1.storage = Path(model1.data.storage.path)/'model1'
-shutil.rmtree(model1.data.storage.path, ignore_errors=True)
-model1.data.storage.exists
-model1.fit(epochs=1)
-
-model2 = ae.model2()
-model2.data = _data()
-model2.data.storage = Dir(storage/'_data')
-model2.storage = Path(model2.data.storage.path)/'model2'
-model2.fit(epochs=1)
-
-x1_1 = model1.data.data2.train
-x1_2 = model1.data.data2.test
-x2 = dmld.PCA(n_components=max(model1.data.ij.i)+1).fit(x1_1)
+x1_1 = model.data.data2.train
+x1_2 = model.data.data2.test
+x2 = dmld.PCA(n_components=max(model.data.ij.i)+1).fit(x1_1)
 x3_1 = x2.inverse_transform(x2.transform(x1_1))
 x3_2 = x2.inverse_transform(x2.transform(x1_2))
-x4_1 = model2.model.predict(x1_1)
-x4_2 = model2.model.predict(x1_2)
+x4_1 = model.model.predict(x1_1.compute())
+x4_2 = model.model.predict(x1_2.compute())
 
 print(((x1_1-x3_1)**2).mean().compute())
 print(((x1_2-x3_2)**2).mean().compute())
@@ -152,6 +126,9 @@ print(((x1_2-x4_2)**2).mean().compute())
 print(((x3_1-x4_1)**2).mean().compute())
 print(((x3_2-x4_2)**2).mean().compute())
 
+x5_1 = ((x1_1-x4_1)**2).mean(axis=0).compute()
+plt.hist(x5_1)
+plt.show()
 
 
 
