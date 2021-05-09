@@ -16,10 +16,28 @@ import json
 class _data:
     @property
     def data1(self):
-        return expr.mat2
+        mat2 = expr.mat2
+
+        mat = mat2.xarray
+        mat['mean'] = mat.data.mean(axis=0).compute()
+        mat = mat.sel(cols=mat['mean']>(-7))
+
+        cols = pd.DataFrame({'col': mat.cols.values})
+        cols['j'] = range(cols.shape[0])
+
+        col_go = mat2.col_go[['col', 'display_label']].rename(columns={'display_label': 'go'}).drop_duplicates()
+        col_go = cols.set_index('col').join(col_go.set_index('col'), how='inner').reset_index()
+        go = col_go.value_counts('go').rename('n').reset_index()
+
+        return SimpleNamespace(
+            mat = mat.data.data,
+            cols = cols,
+            col_go = col_go,
+            go = go
+        )
 
     def _split(self, ratio):
-        data1 = self.data1.xarray.data.data
+        data1 = self.data1.mat
         chunks = data1.chunks[0]
 
         perm = (
@@ -42,26 +60,14 @@ class _data:
 
     @lazy_property
     def data2(self):
-        x1 = self.data1.xarray
-        x1['mean'] = x1.data.mean(axis=0).compute()
-        x1 = x1.sel(cols=x1['mean']>(-7))
-
         split = self.split
-        x2 = SimpleNamespace()
-        x2.cols = x1.cols.values
-        x2.train = daa.vstack([
-            x1.data.data[chunk[0],:]
-            for chunk in split
-        ])
-        x2.test = daa.vstack([
-            x1.data.data[chunk[1],:]
-            for chunk in split
-        ])
-
-        x3 = dmlp.StandardScaler().fit(x2.train)
-        x2.train = x3.transform(x2.train)
-        x2.test = x3.transform(x2.test)
-        return x2
+        data1 = self.data1
+        data1.train = daa.vstack([data1.mat[chunk[0], :] for chunk in split])
+        data1.test = daa.vstack([data1.mat[chunk[1], :] for chunk in split])
+        scaler = dmlp.StandardScaler().fit(data1.train)
+        data1.train = scaler.transform(data1.train)
+        data1.test = scaler.transform(data1.test)
+        return data1
 
     @property
     def num_cols(self):
@@ -69,19 +75,12 @@ class _data:
 
     @lazy_property
     def ij(self):
-        x4_1 = self.data2
-
-        x4_3 = self.data1.col_go[['col', 'display_label']].rename(columns={'display_label': 'go'}).drop_duplicates()
-        x4_2 = pd.DataFrame({'col': x4_1.cols})
-        x4_2['j'] = range(x4_2.shape[0])
-        x4_2 = x4_2.set_index('col').join(x4_3.set_index('col'), how='inner').set_index('go')
-        x4_3 = x4_2.index.value_counts()
-        x4_3 = x4_3[(x4_3 >= 10) & (x4_3 <= 700)]
-        x4_3 = x4_3.to_frame()
-        x4_3['i'] = range(x4_3.shape[0])
-        x4_2 = x4_2.join(x4_3.i, how='inner')
-        x4_2 = x4_2[['i', 'j']].reset_index(drop=True).sort_values(['i', 'j'])
-        return x4_2
+        data2 = self.data2
+        go = data2.go.query('(n >= 10) & (n <= 700)').copy()
+        go['i'] = range(go.shape[0])
+        ij = data2.col_go.set_index('go').join(go.set_index('go').i, how='inner')[['i', 'j']]
+        ij = ij.reset_index(drop=True).sort_values(['i', 'j'])
+        return ij
 
 class _fit:
     kwargs = {}
@@ -101,8 +100,6 @@ class _fit:
             model = tfk.models.load_model(self.storage)
             return model
         model = self.build()
-        print(f'saving model to {self.storage}')
-        model.save(self.storage)
         return model
 
     def fit(self, **kwargs):
@@ -110,8 +107,8 @@ class _fit:
         history = model.fit(
             *self.data.data.Xy,
             **{
-                **self.kwargs.get('fit', {}),
                 'callbacks': [self.cp_callback],
+                **self.kwargs.get('fit', {}),
                 **self.data.data.kwargs,
                 **kwargs
             }
@@ -122,8 +119,6 @@ class _fit:
         print(f'saving history to {history_file}')
         with open(history_file, 'wt') as file:
             json.dump(history.history, file)
-        print(f'saving model to {self.storage}')
-        model.save(self.storage)
 
 class data1(_data):
     @lazy_property
@@ -153,6 +148,8 @@ class data1(_data):
         return data3
 
 class data2(_data):
+    batch_size = 800
+
     @lazy_property
     def data(self):
         data2 = self.data2
@@ -164,7 +161,7 @@ class data2(_data):
             Xy = [data2.train, data2.train],
             kwargs = dict(
                 validation_data = (data2.test, data2.test),
-                batch_size = 800
+                batch_size = self.batch_size
             )
         )
         return data4
