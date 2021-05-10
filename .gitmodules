@@ -13,3 +13,6 @@
 [submodule "ensembl"]
 	path = ensembl
 	url = ssh://git@github.com/vttrifonov/ensembl.git
+[submodule "depmap"]
+	path = depmap
+	url = ssh://git@github.com/vttrifonov/depmap.git
