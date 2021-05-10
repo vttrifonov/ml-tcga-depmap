@@ -1,0 +1,6 @@
+more-itertools
+zarr
+dask-ml
+xarray
+s3fs
+mysql-connector-python

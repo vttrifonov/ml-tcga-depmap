@@ -1,0 +1,15 @@
+# Domino
+domino.log
+dominodump-*
+results/run-*/
+
+env
+.cache
+.idea
+.vscode
+__pycache__
+vscode-settings
+.empty
+.ipynb_checkpoints
+.Trash*
+output

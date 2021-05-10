@@ -18,6 +18,10 @@ import ensembl.sql.ensembl as ensembl
 
 class Expr:
     @lazy_property
+    def storage(self):
+        return Dir(config.cache/'expr')
+
+    @lazy_property
     @cached_property(type=Dir.pickle)
     def files(self):
         import json
@@ -209,7 +213,7 @@ class Expr:
         @cached_property(type=Dir.pickle)
         def col_transcript(self):
             col_gene = self.col_gene
-            gene_transcript = ensembl.query(ensembl.sql['gene_transcript'])
+            gene_transcript = ensembl.query(ensembl.sql['gene_transcript'], 'homo_sapiens_core_102_38')
             col_transcript = col_gene.set_index('gene_id').\
                 join(gene_transcript.set_index('gene_id'), how='inner')
             col_transcript = col_transcript.reset_index(drop=True).drop_duplicates()
@@ -271,8 +275,5 @@ class Expr:
         mat.storage = self.storage.child('mat2')
         return mat
 
-
 expr = Expr()
-expr.storage = config.cache.child('expr')
-
 

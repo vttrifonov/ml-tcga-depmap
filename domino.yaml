@@ -1,0 +1,15 @@
+datasetConfigurations:
+ - name: "cache-output"
+   inputs:
+     - path: "cache"
+       dataset: "cache"
+   outputs:
+     - path: "cache-output"
+       dataset: "cache"
+ - name: "cache-input"
+   inputs:
+     - path: "cache"
+       dataset: "cache"
+   outputs:
+     - path: "output"
+       dataset: "output"

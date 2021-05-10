@@ -1,0 +1,61 @@
+#!/bin/bash
+
+#dir=~/.rstudio/monitored/user-settings
+#file=$dir/user-settings
+
+#mkdir -p $dir
+#cp .rstudio-user-settings $file
+#sed -i.bak '/initialWorkingDirectory=/d' $file
+#chown -R ubuntu:ubuntu /home/ubuntu/.rstudio
+#if [ -f .domino/launch-rstudio-server ]; then
+#    sed -i.bak \
+#	    "s# > $file# >> $file#" \
+#	    .domino/launch-rstudio-server
+#    chown ubuntu:ubuntu .domino/launch-rstudio-server
+#fi
+
+#eval $(/home/linuxbrew/.linuxbrew/bin/brew shellenv)
+
+echo bind \''"\\e[A": history-search-backward'\' >> ~/.bashrc
+echo bind \''"\\e[B": history-search-forward'\' >> ~/.bashrc 
+
+#sudo sed -i '/^printenv/i eval $(/home/linuxbrew/.linuxbrew/bin/brew shellenv)' /var/opt/workspaces/rstudio/start
+
+#rm -rf ./env
+#yes | conda env create -p ./env --file env.yml
+#conda init bash
+#conda config --set changeps1 False
+#echo "conda activate ./env" >> ~/.bashrc
+
+#Rscript -e "renv::restore()"
+
+pip install --user -r requirements-domino.txt
+
+rm -f config.yml
+ln -s config-domino.yml config.yml
+
+rm -rf .cache
+rm -rf output
+scratch=/domino/datasets/vtrifono/ml-tcga-depmap/scratch
+if [ -d $scratch ]
+then 
+    echo Attaching scratch...
+    ln -s $scratch .cache
+
+    rm -f .vscode
+    ln -s .cache/.vscode .vscode
+
+    rm -f vscode-settings
+    ln -s .cache/vscode-settings vscode-settings
+    
+    ln -s .cache output
+else
+    cache=/domino/datasets/cache
+    output=/domino/datasets/output
+    
+    [ -d $cache ] && ln -s $cache .cache
+    [ -d $output ] && ln -s $output output
+fi
+
+
+
