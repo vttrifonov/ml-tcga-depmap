@@ -27,13 +27,13 @@ storage = Path('output/playground3')
 #shutil.rmtree(storage)
 storage.mkdir(parents=True, exist_ok=True)
 
-model = ae.model3()
+model = ae.model2()
 model.data =  ae.data2()
 model.kwargs = {'cp_callback': {'save_freq': 121, 'verbose': 1}}
 model.data.storage = Dir(storage/'data')
 model.storage = Path(model.data.storage.path)/'model3'
 model.fit(epochs=100, steps_per_epoch=12)
 
-
+model.data.data1.go.query('n>=5').sort_values('n')
 
 

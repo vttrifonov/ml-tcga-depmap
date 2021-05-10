@@ -14,7 +14,7 @@ import datetime
 import json
 
 class _data:
-    @property
+    @lazy_property
     def data1(self):
         mat2 = expr.mat2
 
