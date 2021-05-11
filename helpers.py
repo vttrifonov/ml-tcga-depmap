@@ -17,7 +17,7 @@ class Config:
 
     @lazy_property
     def cache(self):
-        return Path(os.environ['ML_TCGA_DEPMAP_CACHE'])
+        return Path(os.environ.get('ML_TCGA_DEPMAP_CACHE', Path.home()/'.cache'/'ml-tcga-depmap'))
 
 config = Config()
 
