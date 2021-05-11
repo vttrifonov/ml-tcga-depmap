@@ -19,7 +19,7 @@ import ensembl.sql.ensembl as ensembl
 class Expr:
     @lazy_property
     def storage(self):
-        return Dir(config.cache/'expr')
+        return Dir(config.cache/'gdc/expr')
 
     @lazy_property
     @cached_property(type=Dir.pickle)
@@ -213,7 +213,7 @@ class Expr:
         @cached_property(type=Dir.pickle)
         def col_transcript(self):
             col_gene = self.col_gene
-            gene_transcript = ensembl.query(ensembl.sql['gene_transcript'], 'homo_sapiens_core_102_38')
+            gene_transcript = ensembl.query(ensembl.sql['gene_transcript'], 'homo_sapiens_core_104_38')
             col_transcript = col_gene.set_index('gene_id').\
                 join(gene_transcript.set_index('gene_id'), how='inner')
             col_transcript = col_transcript.reset_index(drop=True).drop_duplicates()
@@ -223,11 +223,21 @@ class Expr:
         @cached_property(type=Dir.pickle)
         def col_go(self):
             col_transcript = self.col_transcript
-            transcript_go = ensembl.query(ensembl.sql['transcript_go'])
+            transcript_go = ensembl.query(ensembl.sql['transcript_go'], 'homo_sapiens_core_104_38')
             col_go = col_transcript.set_index('transcript_id').\
                 join(transcript_go.set_index('stable_id'), how='inner')
             col_go = col_go.reset_index(drop=True).drop_duplicates()
             return col_go
+
+        @lazy_property
+        @cached_property(type=Dir.pickle)
+        def col_entrez(self):
+            col_gene = self.col_gene
+            gene_entrez = ensembl.query(ensembl.sql['gene_entrez'], 'homo_sapiens_core_104_38')
+            col_entrez = col_gene.set_index('gene_id').\
+                join(gene_entrez.set_index('stable_id'), how='inner')
+            col_entrez = col_entrez.reset_index(drop=True).drop_duplicates()
+            return col_entrez
 
         @lazy_property
         def zarr(self):

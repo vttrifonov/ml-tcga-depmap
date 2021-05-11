@@ -7,7 +7,7 @@ from common.defs import lazy_property
 from common.dir import Dir, cached_property
 from types import SimpleNamespace
 import dask.array as daa
-from expr import expr
+from gdc_expr import expr
 from helpers import chunk_iter
 from ae import Sparse1
 import datetime

@@ -4,7 +4,7 @@ if __name__ != '__main__':
 from pathlib import Path
 from common.dir import Dir
 from helpers import config
-import ae_expr as ae
+import ae_gdc_expr as ae
 import sys
 
 config.exec()

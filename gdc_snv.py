@@ -115,4 +115,4 @@ class SNV:
         return self.Mat(self, genes)
 
 snv = SNV()
-snv.storage = cache.child('snv')
+snv.storage = cache.child('gdc/snv')
