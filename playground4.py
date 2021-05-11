@@ -11,15 +11,15 @@ from common.defs import lazy_property
 from common.dir import Dir, cached_property
 from types import SimpleNamespace
 import dask.array as daa
-from expr import expr
+from gdc_expr import expr
 from helpers import chunk_iter, config
 import xarray as xa
 import itertools as it
 import matplotlib.pyplot as plt
 
-import ae_expr
-importlib.reload(ae_expr)
-import ae_expr as ae
+import ae_gdc_expr
+importlib.reload(ae_gdc_expr)
+import ae_gdc_expr as ae
 
 config.exec()
 

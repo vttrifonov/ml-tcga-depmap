@@ -20,11 +20,11 @@ import types
 import tensorflow as tf
 import tensorflow.keras as tfk
 
-import expr
+import gdc_expr
 import helpers
-importlib.reload(expr)
+importlib.reload(gdc_expr)
 importlib.reload(helpers)
-from expr import expr
+from gdc_expr import expr
 from helpers import chunk_perm, chunk_iter, config
 
 config.exec()
