@@ -30,7 +30,7 @@ class Expr:
         data['rows'] = ('rows', rows)
         data = data.merge(samples.set_index('rows').to_xarray())
         data = data.merge(cols.set_index('cols').to_xarray())
-        data['mat'] = (('rows', 'cols'), mat)
+        data['expr'] = (('rows', 'cols'), mat)
 
         return data
 
