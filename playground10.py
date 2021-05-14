@@ -18,129 +18,191 @@ import dask.array as daa
 
 import depmap_crispr
 import depmap_expr
+import depmap_cnv
 import gdc_expr
 importlib.reload(depmap_crispr)
 importlib.reload(depmap_expr)
+importlib.reload(depmap_cnv)
 importlib.reload(gdc_expr)
 from depmap_crispr import crispr as depmap_crispr
 from depmap_expr import expr as depmap_expr
+from depmap_cnv import cnv as depmap_cnv
 from gdc_expr import expr as gdc_expr
 
-x1 = SimpleNamespace()
+class x4:
+    x1 = SimpleNamespace()
 
-x1.crispr = depmap_crispr.data.copy()
-x1.crispr = x1.crispr.sel(cols=np.isnan(x1.crispr.mat).sum(axis=0)==0)
-x1.crispr = x1.crispr.sel(rows=np.isnan(x1.crispr.mat).sum(axis=1)==0)
-x1.crispr['mat'] = (('rows', 'cols'), daa.from_array(x1.crispr.mat.values))
-x1.crispr = x1.crispr.rename({'mat': 'crispr', 'cols': 'crispr_cols'})
+    x1.crispr = depmap_crispr.data.copy()
+    x1.crispr = x1.crispr.sel(cols=np.isnan(x1.crispr.mat).sum(axis=0)==0)
+    x1.crispr = x1.crispr.sel(rows=np.isnan(x1.crispr.mat).sum(axis=1)==0)
+    x1.crispr['mat'] = (('rows', 'cols'), daa.from_array(x1.crispr.mat.values))
+    x1.crispr = x1.crispr.rename({'mat': 'crispr', 'cols': 'crispr_cols'})
 
-x1.dm_expr = depmap_expr.data.copy()
-x1.dm_expr = x1.dm_expr.sel(cols=np.isnan(x1.dm_expr.mat).sum(axis=0)==0)
-x1.dm_expr = x1.dm_expr.sel(rows=np.isnan(x1.dm_expr.mat).sum(axis=1)==0)
-x1.dm_expr['mean'] = x1.dm_expr.mat.mean(axis=0)
-x1.dm_expr = x1.dm_expr.sel(cols=x1.dm_expr['mean']>1.5)
-x1.dm_expr['mat'] = (('rows', 'cols'), daa.from_array(x1.dm_expr.mat.values))
-x1.dm_expr = x1.dm_expr.rename({'mat': 'dm_expr', 'cols': 'expr_cols'})
+    x1.dm_expr = depmap_expr.data.copy()
+    x1.dm_expr = x1.dm_expr.sel(cols=np.isnan(x1.dm_expr.mat).sum(axis=0)==0)
+    x1.dm_expr = x1.dm_expr.sel(rows=np.isnan(x1.dm_expr.mat).sum(axis=1)==0)
+    x1.dm_expr['mean'] = x1.dm_expr.mat.mean(axis=0)
+    x1.dm_expr = x1.dm_expr.sel(cols=x1.dm_expr['mean']>1.5)
+    x1.dm_expr['mat'] = (('rows', 'cols'), daa.from_array(x1.dm_expr.mat.values))
+    x1.dm_expr = x1.dm_expr.rename({'mat': 'dm_expr', 'cols': 'expr_cols'})
 
-x1_1 = gdc_expr.mat2.col_entrez[['col', 'dbprimary_acc', 'display_label']]
-x1_1 = x1_1.drop_duplicates()
-x1_1 = x1_1.rename(columns={
-    'col': 'cols',
-    'dbprimary_acc': 'entrez',
-    'display_label': 'symbol'
-})
-x1_1['expr_cols'] = x1_1.symbol + ' (' + x1_1.entrez + ')'
-x1_1 = x1_1.query('expr_cols.isin(@x1.dm_expr.expr_cols.values)').copy()
-x1_1['n'] = x1_1.groupby('expr_cols').expr_cols.transform('size')
-x1_1 = x1_1.query('n==1 | cols.str.find("ENSGR")<0')
-x1_1['n'] = x1_1.groupby('expr_cols').expr_cols.transform('size')
-x1_1 = x1_1.query('n==1')
-del x1_1['n']
-x1_1 = x1_1.set_index('cols').to_xarray()
+    x1.dm_cnv = depmap_cnv.data.copy()
+    x1.dm_cnv = x1.dm_cnv.sel(cols=np.isnan(x1.dm_cnv.mat).sum(axis=0)==0)
+    x1.dm_cnv = x1.dm_cnv.sel(rows=np.isnan(x1.dm_cnv.mat).sum(axis=1)==0)
+    x1.dm_cnv['mat'] = (('rows', 'cols'), daa.from_array(x1.dm_cnv.mat.values))
+    x1.dm_cnv = x1.dm_cnv.rename({'mat': 'dm_cnv', 'cols': 'cnv_cols'})
 
-x1.gdc_expr = gdc_expr.mat2.xarray[['data', 'rows', 'cols']]
-x1.gdc_expr = x1.gdc_expr.sel(cols=x1_1.cols)
-x1.gdc_expr = x1.gdc_expr.merge(x1_1)
-x1.gdc_expr = x1.gdc_expr.swap_dims({'cols': 'expr_cols'})
-del x1.gdc_expr['cols']
-x1.gdc_expr = x1.gdc_expr.sel(expr_cols=daa.isnan(x1.gdc_expr.data.data).sum(axis=0).compute()==0)
-x1.gdc_expr = x1.gdc_expr.sel(rows=daa.isnan(x1.gdc_expr.data.data).sum(axis=1).compute()==0)
-x1.gdc_expr['mean'] = x1.gdc_expr.data.mean(axis=0).compute()
-x1.gdc_expr = x1.gdc_expr.sel(expr_cols=x1.gdc_expr['mean']>(-7))
-x1.gdc_expr = x1.gdc_expr.rename({'data': 'gdc_expr', 'rows': 'gdc_expr_rows'})
+    x1_1 = gdc_expr.mat2.col_entrez[['col', 'dbprimary_acc', 'display_label']]
+    x1_1 = x1_1.drop_duplicates()
+    x1_1 = x1_1.rename(columns={
+        'col': 'cols',
+        'dbprimary_acc': 'entrez',
+        'display_label': 'symbol'
+    })
+    x1_1['expr_cols'] = x1_1.symbol + ' (' + x1_1.entrez + ')'
+    x1_1 = x1_1.query('expr_cols.isin(@x1.dm_expr.expr_cols.values)').copy()
+    x1_1['n'] = x1_1.groupby('expr_cols').expr_cols.transform('size')
+    x1_1 = x1_1.query('n==1 | cols.str.find("ENSGR")<0')
+    x1_1['n'] = x1_1.groupby('expr_cols').expr_cols.transform('size')
+    x1_1 = x1_1.query('n==1')
+    del x1_1['n']
+    x1_1 = x1_1.set_index('cols').to_xarray()
 
-x4_1 = set(x1.crispr.rows.values)
-x4_1.intersection_update(x1.dm_expr.rows.values)
-x4_1 = list(x4_1)
+    x1.gdc_expr = gdc_expr.mat2.xarray[['data', 'rows', 'cols']]
+    x1.gdc_expr = x1.gdc_expr.sel(cols=x1_1.cols)
+    x1.gdc_expr = x1.gdc_expr.merge(x1_1)
+    x1.gdc_expr = x1.gdc_expr.swap_dims({'cols': 'expr_cols'})
+    del x1.gdc_expr['cols']
+    x1.gdc_expr = x1.gdc_expr.sel(expr_cols=daa.isnan(x1.gdc_expr.data.data).sum(axis=0).compute()==0)
+    x1.gdc_expr = x1.gdc_expr.sel(rows=daa.isnan(x1.gdc_expr.data.data).sum(axis=1).compute()==0)
+    x1.gdc_expr['mean'] = x1.gdc_expr.data.mean(axis=0).compute()
+    x1.gdc_expr = x1.gdc_expr.sel(expr_cols=x1.gdc_expr['mean']>(-7))
+    x1.gdc_expr = x1.gdc_expr.rename({'data': 'gdc_expr', 'rows': 'gdc_expr_rows'})
 
-x4_3 = x1.gdc_expr.expr_cols.values
-x4_3 = pd.Series(range(len(x4_3)), index=x4_3)
+    x4_1 = set(x1.crispr.rows.values)
+    x4_1.intersection_update(x1.dm_expr.rows.values)
+    x4_1.intersection_update(x1.dm_cnv.rows.values)
+    x4_1 = list(x4_1)
 
-x4_2 = set(x1.dm_expr.expr_cols.values)
-x4_2.intersection_update(x1.gdc_expr.expr_cols.values)
-x4_2 = list(x4_2)
-x4_2 = x4_3[x4_2].sort_values()
-x4_2 = list(x4_2.index)
+    x4_3 = x1.gdc_expr.expr_cols.values
+    x4_3 = pd.Series(range(len(x4_3)), index=x4_3)
 
-x4 = xa.merge([
-    x1.crispr.crispr.loc[x4_1,:].astype('float32'),
-    x1.dm_expr.dm_expr.loc[x4_1, x4_2].astype('float32'),
-    x1.gdc_expr.gdc_expr.loc[:, x4_2].astype('float32')
-])
-x4.dm_expr.data = dmlp.StandardScaler().fit_transform(x4.dm_expr.data)
-x4.gdc_expr.data = dmlp.StandardScaler().fit_transform(x4.gdc_expr.data)
-x4.crispr.data = dmlp.StandardScaler().fit_transform(x4.crispr.data)
+    x4_2 = set(x1.dm_expr.expr_cols.values)
+    x4_2.intersection_update(x1.gdc_expr.expr_cols.values)
+    x4_2 = list(x4_2)
+    x4_2 = x4_3[x4_2].sort_values()
+    x4_2 = list(x4_2.index)
 
-def _svd_u(x):
-    pca = dmld.PCA(n_components=x.shape[0]-1).fit(x)
-    u = pca.transform(x) / (pca.singular_values_.reshape(1,-1))
-    return SimpleNamespace(u=u, s=pca.singular_values_)
+    x4 = xa.merge([
+        x1.crispr.crispr.loc[x4_1,:].astype('float32'),
+        x1.dm_cnv.dm_cnv.loc[x4_1,:].astype('float32'),
+        x1.dm_expr.dm_expr.loc[x4_1, x4_2].astype('float32'),
+        x1.gdc_expr.gdc_expr.loc[:, x4_2].astype('float32')
+    ])
+    x4.crispr.data = dmlp.StandardScaler().fit_transform(x4.crispr.data)
+    x4.dm_expr.data = dmlp.StandardScaler().fit_transform(x4.dm_expr.data)
+    x4.dm_cnv.data = dmlp.StandardScaler().fit_transform(x4.dm_cnv.data)
+    x4.gdc_expr.data = dmlp.StandardScaler().fit_transform(x4.gdc_expr.data)
 
-x6_1 = [x4.crispr.data, x4.dm_expr.data, x4.gdc_expr.data]
-x6 = Parallel(n_jobs=4)(delayed(_svd_u)(v) for v in x6_1)
-#for i, x in enumerate(x6):
-#    x.v = (x6_1[i].T @ x.u) / (x.s.reshape(1,-1))
+    crispr = x4.crispr
+    dm_expr = x4.dm_expr
+    dm_cnv = x4.dm_cnv
+    gdc_expr = x4.gdc_expr
 
-def _score(x6_1, x6_2, permute=False):
-    if permute:
-        x6_2 = x6_2[np.random.permutation(x6_2.shape[0]), :]
+def _perm(x):
+    return x[np.random.permutation(x.shape[0]), :]
+
+class SVD:
+    def __init__(self, u, s, v):
+        self.u = u
+        self.s = s
+        self.v = v
+
+    @staticmethod
+    def from_data(data, n = None, solver = 'full'):
+        if n is None:
+            n = min(*data.shape)
+
+        if solver == 'full':
+            svd = daa.linalg.svd(data)
+        elif solver == 'rand':
+            svd = daa.linalg.svd_compressed(data, n)
+        else:
+            raise ValueError('unknown solver')
+
+        return SVD(svd[0][:,:n], svd[1][:n], svd[2][:n,:].T)
+
+    def cut(self, n=None):
+        if n is None:
+            n = len(self.s)
+        return SVD(self.u[:, :n], self.s[:n], self.v[:, :n])
+
+    @property
+    def us(self):
+        return self.u * self.s.reshape(1, -1)
+
+    @property
+    def usv(self):
+        return self.us @ self.v.T
+
+    @property
+    def perm(self):
+        return SVD(_perm(self.u), self.s, self.v)
+
+    @property
+    def inv(self):
+        return SVD(self.u, 1/self.s, self.v)
+
+    @property
+    def T(self):
+        return SVD(self.v, self.s, self.u)
+
+class x6:
+    crispr = SVD.from_data(x4.crispr.data, x4.crispr.shape[0]-1)
+    dm_expr = SVD.from_data(x4.dm_expr.data, x4.dm_expr.shape[0]-1)
+    dm_cnv = SVD.from_data(x4.dm_cnv.data, x4.dm_cnv.shape[0]-1)
+    #x6.gdc_expr = SVD.from_data(x4.gdc_expr.data, 5000, 'rand')
+
+def _score1(x6_1, x6_2):
     x6_3 = x6_1.T @ x6_2
     x6_3 = x6_3 ** 2
     x6_3 = np.apply_along_axis(np.cumsum, 1, x6_3)
+    return x6_3
+
+def _score2(x6_1, x6_2):
+    x6_3 = _score1(x6_1, x6_2)
     x6_3 = np.apply_along_axis(np.cumsum, 0, x6_3)
-    x6_4 = np.full_like(x6_3, 1 / x6_1.shape[0])
-    x6_4 = np.apply_along_axis(np.cumsum, 1, x6_4)
-    x6_4 = np.apply_along_axis(np.cumsum, 0, x6_4)
-    x6_3 /= x6_4
     return x6_3
 
-x7_1 = _score(x6[2].u, x6[0].u, permute=False)
+def _score(x6_1, x6_2, scorer):
+    return scorer(x6_1, x6_2)/scorer(x6_1, _perm(x6_2))
 
-pd.Series(np.round(x7_1.ravel(), 1)).value_counts().sort_index()[:3]
+plt.imshow(_score((x6.crispr.u), x6.dm_expr.u, _score2), aspect='auto')
+plt.clim(0, 3)
+plt.colorbar()
 
-plt.imshow(np.where(x7_1>1.5, 1.5, np.where(x7_1<1.1, 0, np.round(x7_1, 1))))
+plt.imshow(_score((x6.dm_expr.u), x6.dm_cnv.u, _score2), aspect='auto')
+plt.clim(0, 3)
+plt.colorbar()
 
-def _score1(x6_1, x6_2, permute=False):
-    if permute:
-        x6_2 = x6_2[np.random.permutation(x6_2.shape[0]), :]
-    x6_3 = x6_1.T @ x6_2
-    x6_3 = x6_3 ** 2
-    x6_3 = np.apply_along_axis(np.cumsum, 1, x6_3)
-    x6_3 /= x6_3[:,-1:]
-    x6_4 = np.full_like(x6_3, 1 / x6_1.shape[0])
-    x6_4 = np.apply_along_axis(np.cumsum, 1, x6_4)
-    x6_3 /= x6_4
-    return x6_3
+plt.imshow(_score((x6.gdc_expr.v), x6.dm_expr.v, _score2), aspect='auto')
+plt.clim(0, 8)
+plt.colorbar()
 
-x8_1 = _score1(x4.crispr.values, x6[2].u)
-plt.plot(sorted(x8_1.max(axis=1).ravel()), '.')
+x8_4 = x4.dm_expr.data
+x8_1 = SVD.from_data(x8_4).cut(400)
+x8_2 = SVD.from_data(x4.crispr.data).cut(400)
+x8_3 = SVD.from_data(x8_1.inv.us.T @ x8_2.us).cut(None)
+x9_1 = x8_4 @ x8_1.v
+x9_1 = x9_1 @ x8_3.usv
+x9_1 = x9_1 @ x8_2.v.T
 
-x8_2 = _score1(x4.crispr.values, x6[2].u, permute=True)
-plt.plot(sorted(x8_2.max(axis=1).ravel()), '.')
+print(((x4.crispr.data-x9_1)**2).mean().compute())
 
-(x8_1.max(axis=1)>16).sum()
-
-plt.plot(pd.Series(np.argmax(x8_1, axis=1)).value_counts().sort_index(), '.')
-
-plt.plot(x8_1.mean(axis=0), '.')
+x10_1 = np.linspace(-10, 10, 81)
+x10 = pd.DataFrame(dict(
+    x = (x10_1[:-1]+x10_1[1:])/2,
+    y = daa.apply_along_axis(lambda x: np.histogram(x, x10_1)[0], 1, x9_1).sum(axis=0).compute()
+))
+print(x10.query('abs(x)>=5').y.sum()/x9_1.shape[1])
 
