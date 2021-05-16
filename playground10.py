@@ -134,12 +134,16 @@ class SVD:
 
     def cut(self, n=None):
         if n is None:
-            n = len(self.s)
-        return SVD(self.u[:, :n], self.s[:n], self.v[:, :n])
+            n = np.s_[:]
+        return SVD(self.u[:, n], self.s[n], self.v[:, n])
 
     @property
     def us(self):
         return self.u * self.s.reshape(1, -1)
+
+    @property
+    def vs(self):
+        return self.v * self.s.reshape(1, -1)
 
     @property
     def usv(self):
@@ -151,7 +155,7 @@ class SVD:
 
     @property
     def inv(self):
-        return SVD(self.u, 1/self.s, self.v)
+        return SVD(self.v, 1/self.s, self.u)
 
     @property
     def T(self):
@@ -189,15 +193,32 @@ plt.imshow(_score((x6.gdc_expr.v), x6.dm_expr.v, _score2), aspect='auto')
 plt.clim(0, 8)
 plt.colorbar()
 
-x8_4 = x4.dm_expr.data
-x8_1 = SVD.from_data(x8_4).cut(400)
-x8_2 = SVD.from_data(x4.crispr.data).cut(400)
-x8_3 = SVD.from_data(x8_1.inv.us.T @ x8_2.us).cut(None)
-x9_1 = x8_4 @ x8_1.v
-x9_1 = x9_1 @ x8_3.usv
-x9_1 = x9_1 @ x8_2.v.T
+def _score3(x8_4, x8_5, n1, n2, n3):
+    x8_1 = SVD.from_data(x8_4).inv.cut(n1)
+    x8_2 = SVD.from_data(x8_5).cut(n2)
+    x8_3 = SVD.from_data(x8_1.vs.T @ x8_2.us).cut(n3)
+    x9_1 = x8_4 @ x8_1.u
+    x9_1 = x9_1 @ x8_3.usv
+    x9_1 = x9_1 @ x8_2.v.T
+    return x9_1
 
-print(((x4.crispr.data-x9_1)**2).mean().compute())
+x11_6 = (x4.dm_expr.data, x4.crispr.data, np.s_[:], np.s_[:], np.s_[-400:])
+x11_1 = _score3(*x11_6)
+x11_3 = (x11_6[1]-x11_1).compute()
+
+x11_2 = _score3(_perm(x11_6[0]), *x11_6[1:])
+x11_4 = (x11_6[1]-x11_2).compute()
+x11_5 = pd.DataFrame(dict(
+    crispr_cols=x4.crispr.crispr_cols.values,
+    obs=np.mean(x11_3**2, axis=0).ravel(),
+    rand=np.mean(x11_4**2, axis=0).ravel()
+))
+plt.plot(sorted(x11_5.obs), sorted(x11_5.rand), '.')
+plt.gca().axline(tuple([x11_5.min().min()]*2), slope=1)
+
+plt.hist(np.mean(x11_3**2, axis=0).ravel(), 100)
+
+x11_5.sort_values('obs').head(50)
 
 x10_1 = np.linspace(-10, 10, 81)
 x10 = pd.DataFrame(dict(
