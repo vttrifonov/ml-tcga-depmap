@@ -4,7 +4,6 @@ import numpy as np
 import dask_ml.preprocessing as dmlp
 from types import SimpleNamespace
 import dask.array as daa
-from joblib import Parallel, delayed
 from depmap_crispr import crispr as depmap_crispr
 from depmap_expr import expr as depmap_expr
 from depmap_cnv import cnv as depmap_cnv
@@ -16,7 +15,7 @@ class x4:
     x1.crispr = depmap_crispr.data.copy()
     x1.crispr = x1.crispr.sel(cols=np.isnan(x1.crispr.mat).sum(axis=0)==0)
     x1.crispr = x1.crispr.sel(rows=np.isnan(x1.crispr.mat).sum(axis=1)==0)
-    x1.crispr['mat'] = (('rows', 'cols'), daa.from_array(x1.crispr.mat.values))
+    x1.crispr['mat'] = (('rows', 'cols'), x1.crispr.mat.data.rechunk(-1, 1000))
     x1.crispr = x1.crispr.rename({'mat': 'crispr', 'cols': 'crispr_cols'})
 
     x1.dm_expr = depmap_expr.data.copy()
@@ -26,15 +25,15 @@ class x4:
     )
     x1.dm_expr = x1.dm_expr.sel(cols=np.isnan(x1.dm_expr.mat).sum(axis=0)==0)
     x1.dm_expr = x1.dm_expr.sel(rows=np.isnan(x1.dm_expr.mat).sum(axis=1)==0)
+    x1.dm_expr['mat'] = (('rows', 'cols'), x1.dm_expr.mat.data.rechunk(-1, 1000))
     x1.dm_expr['mean'] = x1.dm_expr.mat.mean(axis=0)
     x1.dm_expr = x1.dm_expr.sel(cols=x1.dm_expr['mean']>1.5)
-    x1.dm_expr['mat'] = (('rows', 'cols'), daa.from_array(x1.dm_expr.mat.values))
     x1.dm_expr = x1.dm_expr.rename({'mat': 'dm_expr', 'cols': 'expr_cols'})
 
     x1.dm_cnv = depmap_cnv.data.copy()
     x1.dm_cnv = x1.dm_cnv.sel(cols=np.isnan(x1.dm_cnv.mat).sum(axis=0)==0)
     x1.dm_cnv = x1.dm_cnv.sel(rows=np.isnan(x1.dm_cnv.mat).sum(axis=1)==0)
-    x1.dm_cnv['mat'] = (('rows', 'cols'), daa.from_array(x1.dm_cnv.mat.values))
+    x1.dm_cnv['mat'] = (('rows', 'cols'), x1.dm_cnv.mat.data.rechunk(-1, 1000))
     x1.dm_cnv = x1.dm_cnv.rename({'mat': 'dm_cnv', 'cols': 'cnv_cols'})
 
     x1_1 = gdc_expr.mat2.col_entrez[['col', 'dbprimary_acc', 'display_label']]
@@ -58,12 +57,9 @@ class x4:
     x1.gdc_expr = x1.gdc_expr.merge(x1_1)
     x1.gdc_expr = x1.gdc_expr.swap_dims({'cols': 'expr_cols'})
     del x1.gdc_expr['cols']
-    x1.gdc_expr = x1.gdc_expr.sel(expr_cols=daa.isnan(x1.gdc_expr.data.data).sum(axis=0).compute()==0)
-    x1.gdc_expr = x1.gdc_expr.sel(rows=daa.isnan(x1.gdc_expr.data.data).sum(axis=1).compute()==0)
     x1.gdc_expr['mean'] = x1.gdc_expr.data.mean(axis=0).compute()
     x1.gdc_expr = x1.gdc_expr.sel(expr_cols=x1.gdc_expr['mean']>(-7))
     x1.gdc_expr = x1.gdc_expr.rename({'data': 'gdc_expr', 'rows': 'gdc_expr_rows'})
-
 
     x4_1 = set(x1.crispr.rows.values)
     x4_1.intersection_update(x1.dm_expr.rows.values)
@@ -239,7 +235,3 @@ class model:
             )),
         ]
         return data
-
-self = model(0.8, 400)
-self.data(6665)
-
