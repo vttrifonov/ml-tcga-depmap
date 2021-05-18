@@ -9,7 +9,6 @@ from depmap_crispr import crispr as depmap_crispr
 from depmap_expr import expr as depmap_expr
 from depmap_cnv import cnv as depmap_cnv
 from gdc_expr import expr as gdc_expr
-from common.defs import lazy_property
 
 class x4:
     x1 = SimpleNamespace()
@@ -99,6 +98,9 @@ class x4:
 def _perm(x):
     return x[np.random.permutation(x.shape[0]), :]
 
+def _eval(a):
+    return daa.from_array(a.compute())
+
 class SVD:
     def __init__(self, u, s, v):
         self.u = u
@@ -151,6 +153,11 @@ class SVD:
     def mult(self, x):
         return (x @ self.us) @ self.v.T
 
+    def eval(self):
+        self.u = _eval(self.u)
+        self.s = _eval(self.s)
+        self.v = _eval(self.v)
+
 def _score3(x8_4, x8_5, n1, n2):
     x8_1 = SVD.from_data(x8_4).cut(n1).inv
     x8_2 = SVD.from_data(x8_5).cut(n2)
@@ -168,18 +175,19 @@ class model:
         split['train'] = ('rows', np.random.random(split.rows.shape)<train_split)
 
         self.train = [
-            x4.dm_expr.sel(rows=split.train).data,
-            x4.crispr.sel(rows=split.train).data,
+            _eval(x4.dm_expr.sel(rows=split.train).data),
+            _eval(x4.crispr.sel(rows=split.train).data),
             split.rows[split.train]
         ]
 
         self.test = [
-            x4.dm_expr.sel(rows=~split.train).data,
-            x4.crispr.sel(rows=~split.train).data,
+            _eval(x4.dm_expr.sel(rows=~split.train).data),
+            _eval(x4.crispr.sel(rows=~split.train).data),
             split.rows[~split.train]
         ]
 
         fit = _score3(self.train[0], self.train[1], np.s_[:dims], np.s_[:]).cut(np.s_[:])
+        fit.eval()
         self.fit = [
             fit.mult(self.train[0]),
             fit.mult(self.test[0]),
@@ -187,24 +195,21 @@ class model:
         ]
 
         perm = _perm(self.train[0])
-        perm_fit = _score3(perm, self.train[1], np.s_[:dims], np.s_[:]).cut(np.s_[:]).mult(perm)
-
-        self._stats = [
-            ((self.train[1]-self.fit[0])**2).mean(axis=0),
-            ((self.test[1]-self.fit[1])**2).mean(axis=0),
+        perm_fit = _score3(perm, self.train[1], np.s_[:dims], np.s_[:]).cut(np.s_[:])
+        perm_fit = perm_fit.mult(perm)
+        stats = [
+            ((self.train[1] - self.fit[0]) ** 2).mean(axis=0),
+            ((self.test[1] - self.fit[1]) ** 2).mean(axis=0),
             ((self.train[1] - perm_fit) ** 2).mean(axis=0)
         ]
-
-    @lazy_property
-    def stats(self):
-        stats = Parallel(n_jobs=3)(delayed(lambda x: x.compute())(x) for x in self._stats)
+        stats = [x.compute() for x in stats]
         stats = pd.DataFrame(dict(
             crispr_cols=x4.crispr.crispr_cols.values,
             train=stats[0].ravel(),
             test=stats[1].ravel(),
             rand=stats[2].ravel()
         ))
-        return stats
+        self.stats = stats
 
     def data(self, idx):
         data = [
@@ -213,7 +218,7 @@ class model:
             self.fit[2][:,idx]
 
         ]
-        data = Parallel(n_jobs=4)(delayed(lambda x: x.compute())(x) for x in data)
+        data = [x.compute() for x in data]
         data = [
             pd.DataFrame(dict(
                 pred = data[0],
@@ -233,8 +238,3 @@ class model:
         ]
         return data
 
-x1 = model(0.8, 400)
-
-x1.stats.sort_values('train')
-
-x2 = x1.data(6665)

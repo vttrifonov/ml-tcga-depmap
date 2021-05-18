@@ -3,6 +3,8 @@ import pandas as pd
 import xarray as xa
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
+import plotly.express as px
 import sklearn.preprocessing as sklp
 import sklearn.decomposition as skld
 import dask_ml.decomposition as dmld
@@ -39,6 +41,10 @@ class x4:
     x1.crispr = x1.crispr.rename({'mat': 'crispr', 'cols': 'crispr_cols'})
 
     x1.dm_expr = depmap_expr.data.copy()
+    x1.dm_expr = x1.dm_expr.merge(
+        depmap_expr.release.samples.rename(columns={'DepMap_ID': 'rows'}).set_index('rows').to_xarray(),
+        join='inner'
+    )
     x1.dm_expr = x1.dm_expr.sel(cols=np.isnan(x1.dm_expr.mat).sum(axis=0)==0)
     x1.dm_expr = x1.dm_expr.sel(rows=np.isnan(x1.dm_expr.mat).sum(axis=1)==0)
     x1.dm_expr['mean'] = x1.dm_expr.mat.mean(axis=0)
@@ -68,7 +74,7 @@ class x4:
     del x1_1['n']
     x1_1 = x1_1.set_index('cols').to_xarray()
 
-    x1.gdc_expr = gdc_expr.mat2.xarray[['data', 'rows', 'cols']]
+    x1.gdc_expr = gdc_expr.mat2.xarray[['data', 'rows', 'cols', 'project_id', 'is_normal']]
     x1.gdc_expr = x1.gdc_expr.sel(cols=x1_1.cols)
     x1.gdc_expr = x1.gdc_expr.merge(x1_1)
     x1.gdc_expr = x1.gdc_expr.swap_dims({'cols': 'expr_cols'})
@@ -78,6 +84,7 @@ class x4:
     x1.gdc_expr['mean'] = x1.gdc_expr.data.mean(axis=0).compute()
     x1.gdc_expr = x1.gdc_expr.sel(expr_cols=x1.gdc_expr['mean']>(-7))
     x1.gdc_expr = x1.gdc_expr.rename({'data': 'gdc_expr', 'rows': 'gdc_expr_rows'})
+
 
     x4_1 = set(x1.crispr.rows.values)
     x4_1.intersection_update(x1.dm_expr.rows.values)
@@ -161,6 +168,9 @@ class SVD:
     def T(self):
         return SVD(self.v, self.s, self.u)
 
+    def mult(self, x):
+        return (x @ self.us) @ self.v.T
+
 class x6:
     crispr = SVD.from_data(x4.crispr.data, x4.crispr.shape[0]-1)
     dm_expr = SVD.from_data(x4.dm_expr.data, x4.dm_expr.shape[0]-1)
@@ -193,37 +203,71 @@ plt.imshow(_score((x6.gdc_expr.v), x6.dm_expr.v, _score2), aspect='auto')
 plt.clim(0, 8)
 plt.colorbar()
 
-def _score3(x8_4, x8_5, n1, n2, n3):
-    x8_1 = SVD.from_data(x8_4).inv.cut(n1)
+def _score3(x8_4, x8_5, n1, n2):
+    x8_1 = SVD.from_data(x8_4).cut(n1).inv
     x8_2 = SVD.from_data(x8_5).cut(n2)
-    x8_3 = SVD.from_data(x8_1.vs.T @ x8_2.us).cut(n3)
-    x9_1 = x8_4 @ x8_1.u
-    x9_1 = x9_1 @ x8_3.usv
-    x9_1 = x9_1 @ x8_2.v.T
-    return x9_1
+    x8_3 = SVD.from_data(x8_1.vs.T @ x8_2.us)
+    x8_3.u = x8_1.u @ x8_3.u
+    x8_3.v = x8_2.v @ x8_3.v
+    return x8_3
 
-x11_6 = (x4.dm_expr.data, x4.crispr.data, np.s_[:], np.s_[:], np.s_[-400:])
-x11_1 = _score3(*x11_6)
+x11_10 = x4.dm_expr.rows
+x11_10['train'] = ('rows', np.random.random(x11_10.rows.shape)<0.8)
+
+x11_6 = (x4.dm_expr.sel(rows=x11_10.train).data, x4.crispr.sel(rows=x11_10.train).data, np.s_[:400], np.s_[:], np.s_[:])
+x11_8 = _score3(*x11_6[:4])
+x11_1 = x11_8.cut(x11_6[4]).mult(x11_6[0])
 x11_3 = (x11_6[1]-x11_1).compute()
 
-x11_2 = _score3(_perm(x11_6[0]), *x11_6[1:])
+x11_11 = x11_8.cut(x11_6[4]).mult(x4.dm_expr.sel(rows=~x11_10.train).data)
+x11_13 = (x4.crispr.sel(rows=~x11_10.train).data-x11_11).compute()
+
+x11_7 = _perm(x11_6[0])
+x11_2 = _score3(x11_7, *x11_6[1:4]).cut(x11_6[4]).mult(x11_7)
 x11_4 = (x11_6[1]-x11_2).compute()
 x11_5 = pd.DataFrame(dict(
     crispr_cols=x4.crispr.crispr_cols.values,
     obs=np.mean(x11_3**2, axis=0).ravel(),
-    rand=np.mean(x11_4**2, axis=0).ravel()
+    pred=np.mean(x11_13**2, axis=0).ravel(),
+    rand=np.mean(x11_4**2, axis=0).ravel(),
 ))
-plt.plot(sorted(x11_5.obs), sorted(x11_5.rand), '.')
-plt.gca().axline(tuple([x11_5.min().min()]*2), slope=1)
 
-plt.hist(np.mean(x11_3**2, axis=0).ravel(), 100)
+plt.figure().gca().plot(sorted(x11_5.obs), sorted(x11_5.rand), '.')
+plt.gcf().gca().axline(tuple([x11_5[['obs', 'rand']].min().min()]*2), slope=1)
 
-x11_5.sort_values('obs').head(50)
+plt.figure().gca().hist2d(x11_5.obs, x11_5.pred, bins=200)
 
-x10_1 = np.linspace(-10, 10, 81)
-x10 = pd.DataFrame(dict(
-    x = (x10_1[:-1]+x10_1[1:])/2,
-    y = daa.apply_along_axis(lambda x: np.histogram(x, x10_1)[0], 1, x9_1).sum(axis=0).compute()
+x11_5.sort_values('pred').head(20)
+
+plt.plot(x4.crispr.sel(rows=x11_10.train).data[:,14447], x11_1[:,14447], '.')
+plt.plot(x4.crispr.sel(rows=~x11_10.train).data[:,14447], x11_11[:,14447], '.')
+
+x11_5.sort_values('obs').head(20)
+x11_5.sort_values('obs').query('obs<0.2')
+
+pd.DataFrame(dict(obs=x11_5.obs<0.3, pred=x11_5.pred<0.73)).value_counts().\
+    rename('count').reset_index().\
+    pivot('obs', 'pred', 'count')
+
+x11_9 = pd.DataFrame(dict(
+    expr = x11_1[:,8033].compute(),
+    CCLE_Name = x4.x1.dm_expr.CCLE_Name.loc[x4.dm_expr.rows].values
 ))
-print(x10.query('abs(x)>=5').y.sum()/x9_1.shape[1])
+px.scatter(
+    x11_9.reset_index(),
+    x='index', y='expr',
+    color='CCLE_Name'
+).show()
+
+x12_1 = x11_8.cut(x11_6[4]).mult(x4.gdc_expr.data)
+x12_2 = pd.DataFrame(dict(
+    expr = x12_1[:,14447].compute(),
+    project_id = x4.x1.gdc_expr.project_id.values,
+    is_normal = x4.x1.gdc_expr.is_normal.values
+))
+px.scatter(
+    x12_2.reset_index(),
+    x='index', y='expr',
+    color='project_id', symbol='is_normal'
+).show()
 
