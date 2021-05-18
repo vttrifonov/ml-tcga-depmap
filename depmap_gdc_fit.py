@@ -193,7 +193,7 @@ class model:
         self.fit = fit
 
         perm = _perm(self.train[0])
-        perm_fit = _score3(perm, self.train[1], np.s_[:dims], np.s_[:]).cut(np.s_[:])
+        perm_fit = _score3(perm, self.train[1], np.s_[:dims], np.s_[:]).cut(np.s_[:]).eval()
         perm_fit = perm_fit.mult(perm)
         stats = [
             ((self.train[1] - self.fit[0].usv) ** 2).mean(axis=0),
@@ -214,7 +214,6 @@ class model:
             self.fit[0].usv[:,idx], self.train[1][:,idx],
             self.fit[1].usv[:,idx], self.test[1][:,idx],
             self.fit[2].usv[:,idx]
-
         ]
         data = [x.compute() for x in data]
         data = [
