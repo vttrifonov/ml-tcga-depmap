@@ -5,5 +5,9 @@ renv::install(c(
   'magrittr',
   'rmarkdown',
   'reshape2',
-  'DT'
+  'DT',
+  'shiny',
+  'plotly'
 ))
+
+

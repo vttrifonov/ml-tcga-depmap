@@ -1,0 +1,37 @@
+---
+title: "Untitled"
+output: 
+  html_document:
+    runtime: shiny
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+library(data.table)
+library(magrittr)
+library(reticulate)
+library(ggplot2)
+library(shiny)
+library(plotly)
+source('common/module.R')
+load.module('common')
+```
+
+```{r visqt, include=FALSE, echo=FALSE}
+input<-reactiveValues()
+input$train_split<-0.8
+input$dims<-400
+input$stats_rows_selected<-6666
+
+source('shiny.R', local=TRUE)
+
+.data<-isolate(plot_data())
+
+isolate({
+  plot_data1() %>%
+    ggplotly()
+})
+
+```
+
