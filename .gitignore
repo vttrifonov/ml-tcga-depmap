@@ -12,3 +12,6 @@ results
 .Trash*
 output
 renv
+.Rproj.user
+*.Rproj
+.Rhistory
