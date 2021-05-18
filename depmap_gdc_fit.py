@@ -151,12 +151,13 @@ class SVD:
         return SVD(self.v, self.s, self.u)
 
     def mult(self, x):
-        return (x @ self.us) @ self.v.T
+        return SVD(x @ self.u, self.s, self.v)
 
     def eval(self):
         self.u = _eval(self.u)
         self.s = _eval(self.s)
         self.v = _eval(self.v)
+        return self
 
 def _score3(x8_4, x8_5, n1, n2):
     x8_1 = SVD.from_data(x8_4).cut(n1).inv
@@ -186,21 +187,22 @@ class model:
             split.rows[~split.train]
         ]
 
-        fit = _score3(self.train[0], self.train[1], np.s_[:dims], np.s_[:]).cut(np.s_[:])
-        fit.eval()
-        self.fit = [
+        fit = _score3(self.train[0], self.train[1], np.s_[:dims], np.s_[:]).cut(np.s_[:]).eval()
+        fit = [
             fit.mult(self.train[0]),
             fit.mult(self.test[0]),
             fit.mult(x4.gdc_expr.data)
         ]
+        fit = [x.eval() for x in fit]
+        self.fit = fit
 
         perm = _perm(self.train[0])
         perm_fit = _score3(perm, self.train[1], np.s_[:dims], np.s_[:]).cut(np.s_[:])
         perm_fit = perm_fit.mult(perm)
         stats = [
-            ((self.train[1] - self.fit[0]) ** 2).mean(axis=0),
-            ((self.test[1] - self.fit[1]) ** 2).mean(axis=0),
-            ((self.train[1] - perm_fit) ** 2).mean(axis=0)
+            ((self.train[1] - self.fit[0].usv) ** 2).mean(axis=0),
+            ((self.test[1] - self.fit[1].usv) ** 2).mean(axis=0),
+            ((self.train[1] - perm_fit.usv) ** 2).mean(axis=0)
         ]
         stats = [x.compute() for x in stats]
         stats = pd.DataFrame(dict(
@@ -213,9 +215,9 @@ class model:
 
     def data(self, idx):
         data = [
-            self.fit[0][:,idx], self.train[1][:,idx],
-            self.fit[1][:,idx], self.test[1][:,idx],
-            self.fit[2][:,idx]
+            self.fit[0].usv[:,idx], self.train[1][:,idx],
+            self.fit[1].usv[:,idx], self.test[1][:,idx],
+            self.fit[2].usv[:,idx]
 
         ]
         data = [x.compute() for x in data]
@@ -237,4 +239,7 @@ class model:
             )),
         ]
         return data
+
+self = model(0.8, 400)
+self.data(6665)
 
