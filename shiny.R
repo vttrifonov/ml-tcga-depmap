@@ -1,7 +1,8 @@
-depmap_gdc_fit_model <- import('depmap_gdc_fit')$model
+depmap_gdc_fit <- import('depmap_gdc_fit')
+data <- depmap_gdc_fit$merge()
 
 model <- reactive({
-  depmap_gdc_fit_model(input$train_split, input$dims)
+  depmap_gdc_fit$model(data, input$train_split, input$dims)
 })
 
 stats<-reactive({
