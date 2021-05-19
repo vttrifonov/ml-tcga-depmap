@@ -11,6 +11,7 @@ from pathlib import Path
 import dask.array as daa
 import xarray as xa
 import ensembl.sql.ensembl as ensembl
+import json
 
 class CNV:
     @lazy_property
@@ -19,11 +20,18 @@ class CNV:
 
     @lazy_property
     @cached_property(type=Dir.pickle)
-    def cases(self):
+    def files(self):
         m = _cnv.manifest
         m = m[m.project_id.str.match('TCGA')]
-        m = m[['project_id', 'id', 'case_id']]
         m = m.reset_index(drop=True)
+        s = (json.loads(x) for x in m.samples)
+        s = (pd.DataFrame(x) for x in s)
+        s = (x.query('sample_type.str.find("Normal")<0') for x in s)
+        s = (x['sample_id'] for x in s)
+        s = pd.concat(s)
+        s = s.reset_index(drop=True)
+        m['sample_id'] = s
+        m = m[['project_id', 'id', 'case_id', 'sample_id']]
         return m
 
     def data(self, file):
@@ -31,9 +39,9 @@ class CNV:
 
     @lazy_property
     def rows(self):
-        return self.cases.\
+        return self.files.\
             set_index('id').\
-            sort_values(['project_id'])
+            sort_values(['project_id', 'case_id', 'sample_id'])
 
     @lazy_property
     @cached_property(type=Dir.pickle)
