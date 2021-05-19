@@ -8,6 +8,7 @@ from depmap_crispr import crispr as depmap_crispr
 from depmap_expr import expr as depmap_expr
 from depmap_cnv import cnv as depmap_cnv
 from gdc_expr import expr as gdc_expr
+from gdc_cnv import cnv as gdc_cnv
 
 class x4:
     x1 = SimpleNamespace()
@@ -57,9 +58,34 @@ class x4:
     x1.gdc_expr = x1.gdc_expr.merge(x1_1)
     x1.gdc_expr = x1.gdc_expr.swap_dims({'cols': 'expr_cols'})
     del x1.gdc_expr['cols']
-    x1.gdc_expr['mean'] = x1.gdc_expr.data.mean(axis=0).compute()
+    x1.gdc_expr['mean'] = x1.gdc_expr.data.astype('float32').mean(axis=0).compute()
     x1.gdc_expr = x1.gdc_expr.sel(expr_cols=x1.gdc_expr['mean']>(-7))
     x1.gdc_expr = x1.gdc_expr.rename({'data': 'gdc_expr', 'rows': 'gdc_expr_rows'})
+
+    x1_1 = gdc_cnv.col_entrez[['col', 'dbprimary_acc', 'display_label']]
+    x1_1 = x1_1.drop_duplicates()
+    x1_1 = x1_1.rename(columns={
+        'col': 'cols',
+        'dbprimary_acc': 'entrez',
+        'display_label': 'symbol'
+    })
+    x1_1['cnv_cols'] = x1_1.symbol + ' (' + x1_1.entrez + ')'
+    x1_1 = x1_1.query('cnv_cols.isin(@x1.dm_cnv.cnv_cols.values)').copy()
+    x1_1['n'] = x1_1.groupby('cnv_cols').cnv_cols.transform('size')
+    x1_1 = x1_1.query('n==1 | cols.str.find("ENSGR")<0')
+    x1_1['n'] = x1_1.groupby('cnv_cols').cnv_cols.transform('size')
+    x1_1 = x1_1.query('n==1')
+    del x1_1['n']
+    x1_1 = x1_1.set_index('cols').to_xarray()
+
+    x1.gdc_cnv = gdc_cnv.xarray[['data', 'rows', 'cols', 'project_id', 'case_id']]
+    x1.gdc_cnv = x1.gdc_cnv.sel(cols=x1_1.cols)
+    x1.gdc_cnv = x1.gdc_cnv.merge(x1_1)
+    x1.gdc_cnv = x1.gdc_cnv.sel(cols=np.isnan(x1.gdc_cnv.data).sum(axis=0)==0)
+    x1.gdc_cnv = x1.gdc_cnv.sel(rows=np.isnan(x1.gdc_cnv.data).sum(axis=1)==0)
+    x1.gdc_cnv = x1.gdc_cnv.swap_dims({'cols': 'cnv_cols'})
+    del x1.gdc_cnv['cols']
+    x1.gdc_cnv = x1.gdc_cnv.rename({'data': 'gdc_cnv', 'rows': 'gdc_cnv_rows'})
 
     x4_1 = set(x1.crispr.rows.values)
     x4_1.intersection_update(x1.dm_expr.rows.values)
@@ -75,21 +101,33 @@ class x4:
     x4_2 = x4_3[x4_2].sort_values()
     x4_2 = list(x4_2.index)
 
+    x4_4 = x1.gdc_cnv.cnv_cols.values
+    x4_4 = pd.Series(range(len(x4_4)), index=x4_4)
+
+    x4_5 = set(x1.dm_cnv.cnv_cols.values)
+    x4_5.intersection_update(x1.gdc_cnv.cnv_cols.values)
+    x4_5 = list(x4_5)
+    x4_5 = x4_4[x4_5].sort_values()
+    x4_5 = list(x4_5.index)
+
     x4 = xa.merge([
-        x1.crispr.crispr.loc[x4_1,:].astype('float32'),
-        x1.dm_cnv.dm_cnv.loc[x4_1,:].astype('float32'),
+        x1.crispr.crispr.loc[x4_1, :].astype('float32'),
+        x1.dm_cnv.dm_cnv.loc[x4_1, x4_5].astype('float32'),
         x1.dm_expr.dm_expr.loc[x4_1, x4_2].astype('float32'),
-        x1.gdc_expr.gdc_expr.loc[:, x4_2].astype('float32')
+        x1.gdc_expr.gdc_expr.loc[:, x4_2].astype('float32'),
+        x1.gdc_cnv.gdc_cnv.loc[:, x4_5].astype('float32')
     ])
     x4.crispr.data = dmlp.StandardScaler().fit_transform(x4.crispr.data)
     x4.dm_expr.data = dmlp.StandardScaler().fit_transform(x4.dm_expr.data)
     x4.dm_cnv.data = dmlp.StandardScaler().fit_transform(x4.dm_cnv.data)
     x4.gdc_expr.data = dmlp.StandardScaler().fit_transform(x4.gdc_expr.data)
+    x4.gdc_cnv.data = dmlp.StandardScaler().fit_transform(x4.gdc_cnv.data)
 
     crispr = x4.crispr
     dm_expr = x4.dm_expr
     dm_cnv = x4.dm_cnv
     gdc_expr = x4.gdc_expr
+    gdc_cnv = x4.gdc_cnv
 
 def _perm(x):
     return x[np.random.permutation(x.shape[0]), :]
