@@ -263,7 +263,7 @@ class Expr:
                         data = pd.concat(data)
                         data = np.array(data, dtype='float16')
                         data = data.reshape((_slice.stop-_slice.start, -1))
-                        mat[:, _slice] = data
+                        mat[_slice, :] = data
 
                 ranges = slice_iter(0, len(rows), 1000)
                 ranges = (delayed(_load_data)(range) for range in ranges)
@@ -274,7 +274,7 @@ class Expr:
         @lazy_property
         def xarray(self):
             result = xa.Dataset()
-            result['data'] = (['rows', 'cols'], daa.from_zarr(self.zarr).astype('float32'))
+            result['data'] = (['rows', 'cols'], daa.from_zarr(self.zarr))
             result = result.merge(self.rows.rename_axis('rows'))
             result['cols'] = np.array(self.cols)
             return result
