@@ -17,7 +17,7 @@ class x4:
     x1.crispr = x1.crispr.sel(cols=np.isnan(x1.crispr.mat).sum(axis=0)==0)
     x1.crispr = x1.crispr.sel(rows=np.isnan(x1.crispr.mat).sum(axis=1)==0)
     x1.crispr['mat'] = (('rows', 'cols'), x1.crispr.mat.data.rechunk(-1, 1000))
-    x1.crispr = x1.crispr.rename({'mat': 'crispr', 'cols': 'crispr_cols'})
+    x1.crispr = x1.crispr.rename({'mat': 'crispr', 'cols': 'crispr_cols', 'rows': 'depmap_rows'})
 
     x1.dm_expr = depmap_expr.data.copy()
     x1.dm_expr = x1.dm_expr.merge(
@@ -29,15 +29,15 @@ class x4:
     x1.dm_expr['mat'] = (('rows', 'cols'), x1.dm_expr.mat.data.rechunk(-1, 1000))
     x1.dm_expr['mean'] = x1.dm_expr.mat.mean(axis=0)
     x1.dm_expr = x1.dm_expr.sel(cols=x1.dm_expr['mean']>1.5)
-    x1.dm_expr = x1.dm_expr.rename({'mat': 'dm_expr', 'cols': 'expr_cols'})
+    x1.dm_expr = x1.dm_expr.rename({'mat': 'dm_expr', 'cols': 'expr_cols', 'rows': 'depmap_rows'})
 
     x1.dm_cnv = depmap_cnv.data.copy()
     x1.dm_cnv = x1.dm_cnv.sel(cols=np.isnan(x1.dm_cnv.mat).sum(axis=0)==0)
     x1.dm_cnv = x1.dm_cnv.sel(rows=np.isnan(x1.dm_cnv.mat).sum(axis=1)==0)
     x1.dm_cnv['mat'] = (('rows', 'cols'), x1.dm_cnv.mat.data.rechunk(-1, 1000))
-    x1.dm_cnv = x1.dm_cnv.rename({'mat': 'dm_cnv', 'cols': 'cnv_cols'})
+    x1.dm_cnv = x1.dm_cnv.rename({'mat': 'dm_cnv', 'cols': 'cnv_cols', 'rows': 'depmap_rows'})
 
-    x1_1 = gdc_expr.mat2.col_entrez[['col', 'dbprimary_acc', 'display_label']]
+    x1_1 = gdc_expr.col_entrez[['col', 'dbprimary_acc', 'display_label']]
     x1_1 = x1_1.drop_duplicates()
     x1_1 = x1_1.rename(columns={
         'col': 'cols',
@@ -53,7 +53,7 @@ class x4:
     del x1_1['n']
     x1_1 = x1_1.set_index('cols').to_xarray()
 
-    x1.gdc_expr = gdc_expr.mat2.xarray[['data', 'rows', 'cols', 'project_id', 'is_normal']]
+    x1.gdc_expr = gdc_expr.xarray[['data', 'rows', 'cols', 'project_id', 'is_normal', 'case_id', 'sample_id']]
     x1.gdc_expr = x1.gdc_expr.sel(cols=x1_1.cols)
     x1.gdc_expr = x1.gdc_expr.merge(x1_1)
     x1.gdc_expr = x1.gdc_expr.swap_dims({'cols': 'expr_cols'})
@@ -78,7 +78,7 @@ class x4:
     del x1_1['n']
     x1_1 = x1_1.set_index('cols').to_xarray()
 
-    x1.gdc_cnv = gdc_cnv.xarray[['data', 'rows', 'cols', 'project_id', 'case_id']]
+    x1.gdc_cnv = gdc_cnv.xarray[['data', 'rows', 'cols', 'project_id', 'case_id', 'sample_id']]
     x1.gdc_cnv = x1.gdc_cnv.sel(cols=x1_1.cols)
     x1.gdc_cnv = x1.gdc_cnv.merge(x1_1)
     x1.gdc_cnv = x1.gdc_cnv.sel(cols=np.isnan(x1.gdc_cnv.data).sum(axis=0)==0)
@@ -87,9 +87,9 @@ class x4:
     del x1.gdc_cnv['cols']
     x1.gdc_cnv = x1.gdc_cnv.rename({'data': 'gdc_cnv', 'rows': 'gdc_cnv_rows'})
 
-    x4_1 = set(x1.crispr.rows.values)
-    x4_1.intersection_update(x1.dm_expr.rows.values)
-    x4_1.intersection_update(x1.dm_cnv.rows.values)
+    x4_1 = set(x1.crispr.depmap_rows.values)
+    x4_1.intersection_update(x1.dm_expr.depmap_rows.values)
+    x4_1.intersection_update(x1.dm_cnv.depmap_rows.values)
     x4_1 = list(x4_1)
 
     x4_3 = x1.gdc_expr.expr_cols.values
@@ -109,6 +109,12 @@ class x4:
     x4_5 = list(x4_5)
     x4_5 = x4_4[x4_5].sort_values()
     x4_5 = list(x4_5.index)
+
+    x5_1 = x1.gdc_expr[['sample_id']].to_dataframe().reset_index().set_index('sample_id')
+    x5_2 = x1.gdc_cnv[['sample_id']].to_dataframe().reset_index().set_index('sample_id')
+    x5_3 = x5_1.join(x5_2, how='inner')
+    x5_3['gdc_rows'] = x5_3.gdc_expr_rows + '+' + x5_3.gdc_cnv_rows
+    x5_3 = x5_3.set_index('gdc_rows').to_xarray()
 
     x4 = xa.merge([
         x1.crispr.crispr.loc[x4_1, :].astype('float32'),
@@ -206,19 +212,19 @@ class model:
         self.train_split = train_split
         self.dims = dims
 
-        split = x4.dm_expr.rows
-        split['train'] = ('rows', np.random.random(split.rows.shape)<train_split)
+        split = x4.dm_expr.depmap_rows
+        split['train'] = ('depmap_rows', np.random.random(split.depmap_rows.shape)<train_split)
 
         self.train = [
-            _eval(x4.dm_expr.sel(rows=split.train).data),
-            _eval(x4.crispr.sel(rows=split.train).data),
-            split.rows[split.train]
+            _eval(x4.dm_expr.sel(depmap_rows=split.train).data),
+            _eval(x4.crispr.sel(depmap_rows=split.train).data),
+            split.depmap_rows[split.train]
         ]
 
         self.test = [
-            _eval(x4.dm_expr.sel(rows=~split.train).data),
-            _eval(x4.crispr.sel(rows=~split.train).data),
-            split.rows[~split.train]
+            _eval(x4.dm_expr.sel(depmap_rows=~split.train).data),
+            _eval(x4.crispr.sel(depmap_rows=~split.train).data),
+            split.depmap_rows[~split.train]
         ]
 
         fit = _score3(self.train[0], self.train[1], np.s_[:dims], np.s_[:]).cut(np.s_[:]).eval()
@@ -272,3 +278,7 @@ class model:
             )),
         ]
         return data
+
+x1 = model(0.8, 400)
+
+x1.stats.sort_values('train').head(20)
