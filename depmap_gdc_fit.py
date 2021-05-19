@@ -32,6 +32,17 @@ def _cache(path, x):
     x['data'] = (p[0], daa.from_zarr(zarr.open(data).astype('float32')))
     return x
 
+def _perm(x):
+    return x[np.random.permutation(x.shape[0]), :]
+
+def _score3(x8_4, x8_5, n1, n2):
+    x8_1 = SVD.from_data(x8_4).cut(n1).inv
+    x8_2 = SVD.from_data(x8_5).cut(n2)
+    x8_3 = SVD.from_data(x8_1.vs.T @ x8_2.us)
+    x8_3.u = x8_1.u @ x8_3.u
+    x8_3.v = x8_2.v @ x8_3.v
+    return x8_3
+
 class merge:
     @lazy_property
     def storage(self):
@@ -212,9 +223,6 @@ class merge:
     def gdc_cnv(self):
         return _cache(self.storage/'gdc_cnv', lambda: self._merge.gdc_cnv)
 
-def _perm(x):
-    return x[np.random.permutation(x.shape[0]), :]
-
 class SVD:
     def __init__(self, u, s, v):
         self.u = u
@@ -272,14 +280,6 @@ class SVD:
         self.s = self.s.persist()
         self.v = self.v.persist()
         return self
-
-def _score3(x8_4, x8_5, n1, n2):
-    x8_1 = SVD.from_data(x8_4).cut(n1).inv
-    x8_2 = SVD.from_data(x8_5).cut(n2)
-    x8_3 = SVD.from_data(x8_1.vs.T @ x8_2.us)
-    x8_3.u = x8_1.u @ x8_3.u
-    x8_3.v = x8_2.v @ x8_3.v
-    return x8_3
 
 class model:
     def __init__(self, merge, train_split, dims):
@@ -354,9 +354,3 @@ class model:
         ]
         return data
 
-x4 = merge()
-x1 = model(x4, 0.8, 400)
-
-x1.stats.sort_values('train').head(20)
-
-x1.data(6665)
