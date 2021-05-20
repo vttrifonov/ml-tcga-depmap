@@ -35,8 +35,8 @@ def _cache(path, x):
 def _perm(x):
     return x[np.random.permutation(x.shape[0]), :]
 
-def _score3(x8_4, x8_5, n1, n2):
-    x8_1 = SVD.from_data(x8_4).cut(n1).inv
+def _score3(x8_4, x8_5, l, n1, n2):
+    x8_1 = SVD.from_data(x8_4).cut(n1).inv(l)
     x8_2 = SVD.from_data(x8_5).cut(n2)
     x8_3 = SVD.from_data(x8_1.vs.T @ x8_2.us)
     x8_3.u = x8_1.u @ x8_3.u
@@ -262,9 +262,8 @@ class SVD:
     def perm(self):
         return SVD(_perm(self.u), self.s, self.v)
 
-    @property
-    def inv(self):
-        return SVD(self.v, 1/self.s, self.u)
+    def inv(self, l = 0):
+        return SVD(self.v, self.s/(l + self.s**2), self.u)
 
     @property
     def T(self):
@@ -280,8 +279,8 @@ class SVD:
         return self
 
 class model:
-    def __init__(self, merge, dims):
-        self.dims = dims
+    def __init__(self, merge, reg):
+        self.reg = reg
         self.merge = merge
 
         self.train = [
@@ -294,7 +293,7 @@ class model:
             merge.Y.sel(rows=~merge.split.train).data.data.persist()
         ]
 
-        fit = _score3(self.train[0], self.train[1], np.s_[:dims], np.s_[:]).cut(np.s_[:]).persist()
+        fit = _score3(self.train[0], self.train[1], reg[0], reg[1], np.s_[:]).cut(np.s_[:]).persist()
         fit = [
             fit.mult(self.train[0]),
             fit.mult(self.test[0]),
@@ -304,7 +303,7 @@ class model:
         self.fit = fit
 
         perm = _perm(self.train[0])
-        perm_fit = _score3(perm, self.train[1], np.s_[:dims], np.s_[:]).cut(np.s_[:]).persist()
+        perm_fit = _score3(perm, self.train[1], reg[0], reg[1], np.s_[:]).cut(np.s_[:]).persist()
         perm_fit = perm_fit.mult(perm)
         stats = [
             ((self.train[1] - self.fit[0].usv) ** 2).mean(axis=0),

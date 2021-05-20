@@ -37,23 +37,28 @@ def concat(x):
     x = xa.Dataset().assign(data=x)
     return x
 
-def model(x, y, z, dims):
+def model(x, y, z, reg):
     m1 = SimpleNamespace(
         X = x,
         Y = y,
         Z = z,
         split = m.split
     )
-    m1 = gdf.model(m1, dims)
+    m1 = gdf.model(m1, reg)
     return m1
 
 m = gdf.merge()
 m.split = m.crispr.rows
 m.split['train'] = ('rows', np.random.random(m.split.rows.shape) < 0.8)
-m1 = model(m.dm_expr, m.crispr, m.gdc_expr, 400)
-m2 = model(concat([m.dm_expr, m.dm_cnv]), m.crispr, concat([m.gdc_expr, m.gdc_cnv]), 400)
-m3 = model(m.dm_cnv, m.crispr, m.gdc_cnv, 400)
-m4 = model(m.dm_cnv, m.dm_expr, m.dm_cnv, 400)
+m1 = model(m.dm_expr, m.crispr, m.gdc_expr, [0.5, None])
+m2 = model(concat([m.dm_expr, m.dm_cnv]), m.crispr, concat([m.gdc_expr, m.gdc_cnv]), [0.1, None])
+m3 = model(m.dm_cnv, m.crispr, m.gdc_cnv, [0, np.s_[50:450]])
+m4 = model(m.dm_cnv, m.dm_expr, m.dm_cnv, [0, 50])
+
+x1 = gdf.SVD.from_data(m.dm_cnv.data.data)
+x2 = x1.s.compute()
+plt.plot(x2**2, '.')
+(x2**2)[100]
 
 x1 = m2.stats.set_index('cols').join(m1.stats.set_index('cols'), lsuffix='_x', rsuffix='_y')
 plt.figure().gca().hist(x1.train_x-x1.train_y, 100)
