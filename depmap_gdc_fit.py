@@ -53,7 +53,7 @@ class merge:
         crispr = depmap_crispr.data.copy()
         crispr = crispr.sel(cols=np.isnan(crispr.mat).sum(axis=0)==0)
         crispr['mat'] = (('rows', 'cols'), crispr.mat.data.rechunk(-1, 1000))
-        crispr = crispr.rename({'mat': 'data', 'cols': 'crispr_cols', 'rows': 'depmap_rows'})
+        crispr = crispr.rename({'mat': 'data'})
 
         dm_expr = depmap_expr.data.copy()
         dm_expr = dm_expr.merge(
@@ -64,12 +64,12 @@ class merge:
         dm_expr['mat'] = (('rows', 'cols'), dm_expr.mat.data.rechunk(-1, 1000))
         dm_expr['mean'] = dm_expr.mat.mean(axis=0)
         dm_expr = dm_expr.sel(cols=dm_expr['mean']>1.5)
-        dm_expr = dm_expr.rename({'mat': 'data', 'cols': 'expr_cols', 'rows': 'depmap_rows'})
+        dm_expr = dm_expr.rename({'mat': 'data'})
 
         dm_cnv = depmap_cnv.data.copy()
         dm_cnv = dm_cnv.sel(cols=np.isnan(dm_cnv.mat).sum(axis=0)==0)
         dm_cnv['mat'] = (('rows', 'cols'), dm_cnv.mat.data.rechunk(-1, 1000))
-        dm_cnv = dm_cnv.rename({'mat': 'data', 'cols': 'cnv_cols', 'rows': 'depmap_rows'})
+        dm_cnv = dm_cnv.rename({'mat': 'data'})
 
         x1_1 = _gdc_expr.col_entrez[['col', 'dbprimary_acc', 'display_label']]
         x1_1 = x1_1.drop_duplicates()
@@ -78,39 +78,38 @@ class merge:
             'dbprimary_acc': 'entrez',
             'display_label': 'symbol'
         })
-        x1_1['expr_cols'] = x1_1.symbol + ' (' + x1_1.entrez + ')'
-        x1_1 = x1_1.query('expr_cols.isin(@dm_expr.expr_cols.values)').copy()
-        x1_1['n'] = x1_1.groupby('expr_cols').expr_cols.transform('size')
+        x1_1['new_cols'] = x1_1.symbol + ' (' + x1_1.entrez + ')'
+        x1_1 = x1_1.query('new_cols.isin(@dm_expr.cols.values)').copy()
+        x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
         x1_1 = x1_1.query('n==1 | cols.str.find("ENSGR")<0').copy()
-        x1_1['n'] = x1_1.groupby('expr_cols').expr_cols.transform('size')
+        x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
         x1_1 = x1_1.query('n==1').copy()
         del x1_1['n']
         x1_1 = x1_1.set_index('cols').to_xarray()
 
         x5_1 = _gdc_expr.xarray[['rows', 'project_id', 'is_normal', 'case_id', 'sample_id']].to_dataframe().reset_index()
-        x5_1 = x5_1.rename(columns={'sample_id': 'gdc_rows'})
+        x5_1 = x5_1.rename(columns={'sample_id': 'new_rows'})
         x5_2 = x5_1.drop(columns=['rows']).drop_duplicates()
-        x5_3 = x5_1[['rows', 'gdc_rows']].copy()
-        x5_3['w'] = x5_3.groupby('gdc_rows').gdc_rows.transform('size')
+        x5_3 = x5_1[['rows', 'new_rows']].copy()
+        x5_3['w'] = x5_3.groupby('new_rows').new_rows.transform('size')
         x5_3['w'] = 1/x5_3.w
         x5_3['rows'] = pd.Series(range(x5_1.shape[0]), index=x5_1.rows)[x5_3.rows.to_numpy()].to_numpy()
-        x5_3['gdc_rows'] = pd.Series(range(x5_2.shape[0]), index=x5_2.gdc_rows)[x5_3.gdc_rows.to_numpy()].to_numpy()
+        x5_3['new_rows'] = pd.Series(range(x5_2.shape[0]), index=x5_2.new_rows)[x5_3.new_rows.to_numpy()].to_numpy()
         x5_3 = daa.from_array(
-            sp.COO(x5_3[['gdc_rows', 'rows']].to_numpy().T, x5_3.w.astype('float32')),
+            sp.COO(x5_3[['new_rows', 'rows']].to_numpy().T, x5_3.w.astype('float32')),
             chunks=(1000,-1)
         )
 
         gdc_expr = _gdc_expr.xarray[['data', 'rows', 'cols']]
         gdc_expr = gdc_expr.sel(cols=x1_1.cols)
         gdc_expr = gdc_expr.merge(x1_1)
-        gdc_expr = gdc_expr.swap_dims({'cols': 'expr_cols'})
-        del gdc_expr['cols']
-        gdc_expr = gdc_expr.merge(x5_2.set_index('gdc_rows'))
+        gdc_expr = gdc_expr.swap_dims({'cols': 'new_cols'}).drop('cols').rename({'new_cols': 'cols'})
+        gdc_expr = gdc_expr.merge(x5_2.set_index('new_rows'))
         x5_3 = x5_3.rechunk((None, gdc_expr.data.chunks[0]))
-        gdc_expr['data'] = (('gdc_rows', 'expr_cols'),  x5_3 @ gdc_expr.data.data.astype('float32'))
-        del gdc_expr['rows']
+        gdc_expr['data'] = (('new_rows', 'cols'),  x5_3 @ gdc_expr.data.data.astype('float32'))
+        gdc_expr = gdc_expr.drop('rows').rename({'new_rows': 'rows'})
         gdc_expr['mean'] = gdc_expr.data.mean(axis=0).compute()
-        gdc_expr = gdc_expr.sel(expr_cols=gdc_expr['mean']>(-7))
+        gdc_expr = gdc_expr.sel(cols=gdc_expr['mean']>(-7))
 
         x1_1 = _gdc_cnv.col_entrez[['col', 'dbprimary_acc', 'display_label']].copy()
         x1_1 = x1_1.drop_duplicates()
@@ -119,25 +118,25 @@ class merge:
             'dbprimary_acc': 'entrez',
             'display_label': 'symbol'
         })
-        x1_1['cnv_cols'] = x1_1.symbol + ' (' + x1_1.entrez + ')'
-        x1_1 = x1_1.query('cnv_cols.isin(@dm_cnv.cnv_cols.values)').copy()
-        x1_1['n'] = x1_1.groupby('cnv_cols').cnv_cols.transform('size')
+        x1_1['new_cols'] = x1_1.symbol + ' (' + x1_1.entrez + ')'
+        x1_1 = x1_1.query('new_cols.isin(@dm_cnv.cols.values)').copy()
+        x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
         x1_1 = x1_1.query('n==1 | cols.str.find("ENSGR")<0').copy()
-        x1_1['n'] = x1_1.groupby('cnv_cols').cnv_cols.transform('size')
+        x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
         x1_1 = x1_1.query('n==1').copy()
         del x1_1['n']
         x1_1 = x1_1.set_index('cols').to_xarray()
 
         x5_1 = _gdc_cnv.xarray[['rows', 'project_id', 'case_id', 'sample_id']].to_dataframe().reset_index()
-        x5_1 = x5_1.rename(columns={'sample_id': 'gdc_rows'})
+        x5_1 = x5_1.rename(columns={'sample_id': 'new_rows'})
         x5_2 = x5_1.drop(columns=['rows']).drop_duplicates()
-        x5_3 = x5_1[['rows', 'gdc_rows']].copy()
-        x5_3['w'] = x5_3.groupby('gdc_rows').gdc_rows.transform('size')
+        x5_3 = x5_1[['rows', 'new_rows']].copy()
+        x5_3['w'] = x5_3.groupby('new_rows').new_rows.transform('size')
         x5_3['w'] = 1/x5_3.w
         x5_3['rows'] = pd.Series(range(x5_1.shape[0]), index=x5_1.rows)[x5_3.rows.to_numpy()].to_numpy()
-        x5_3['gdc_rows'] = pd.Series(range(x5_2.shape[0]), index=x5_2.gdc_rows)[x5_3.gdc_rows.to_numpy()].to_numpy()
+        x5_3['new_rows'] = pd.Series(range(x5_2.shape[0]), index=x5_2.new_rows)[x5_3.new_rows.to_numpy()].to_numpy()
         x5_3 = daa.from_array(
-            sp.COO(x5_3[['gdc_rows', 'rows']].to_numpy().T, x5_3.w.astype('float32')),
+            sp.COO(x5_3[['new_rows', 'rows']].to_numpy().T, x5_3.w.astype('float32')),
             chunks=(1000,-1)
         )
 
@@ -145,54 +144,53 @@ class merge:
         gdc_cnv = gdc_cnv.sel(cols=x1_1.cols)
         gdc_cnv = gdc_cnv.merge(x1_1)
         gdc_cnv = gdc_cnv.sel(cols=np.isnan(gdc_cnv.data).sum(axis=0)==0)
-        gdc_cnv = gdc_cnv.swap_dims({'cols': 'cnv_cols'})
-        del gdc_cnv['cols']
-        gdc_cnv = gdc_cnv.merge(x5_2.set_index('gdc_rows'))
+        gdc_cnv = gdc_cnv.swap_dims({'cols': 'new_cols'}).drop('cols').rename({'new_cols': 'cols'})
+        gdc_cnv = gdc_cnv.merge(x5_2.set_index('new_rows'))
         x5_3 = x5_3.rechunk((None, gdc_cnv.data.chunks[0]))
-        gdc_cnv['data'] = (('gdc_rows', 'cnv_cols'),  x5_3 @ gdc_cnv.data.data.astype('float32'))
-        del gdc_cnv['rows']
+        gdc_cnv['data'] = (('new_rows', 'cols'),  x5_3 @ gdc_cnv.data.data.astype('float32'))
+        gdc_cnv = gdc_cnv.drop('rows').rename({'new_rows': 'rows'})
 
-        x4_1 = set(crispr.depmap_rows.values)
-        x4_1.intersection_update(dm_expr.depmap_rows.values)
-        x4_1.intersection_update(dm_cnv.depmap_rows.values)
+        x4_1 = set(crispr.rows.values)
+        x4_1.intersection_update(dm_expr.rows.values)
+        x4_1.intersection_update(dm_cnv.rows.values)
         x4_1 = list(x4_1)
 
-        x4_3 = gdc_expr.expr_cols.values
+        x4_3 = gdc_expr.cols.values
         x4_3 = pd.Series(range(len(x4_3)), index=x4_3)
 
-        x4_2 = set(dm_expr.expr_cols.values)
-        x4_2.intersection_update(gdc_expr.expr_cols.values)
+        x4_2 = set(dm_expr.cols.values)
+        x4_2.intersection_update(gdc_expr.cols.values)
         x4_2 = list(x4_2)
         x4_2 = x4_3[x4_2].sort_values()
         x4_2 = list(x4_2.index)
 
-        x4_4 = gdc_cnv.cnv_cols.values
+        x4_4 = gdc_cnv.cols.values
         x4_4 = pd.Series(range(len(x4_4)), index=x4_4)
 
-        x4_5 = set(dm_cnv.cnv_cols.values)
-        x4_5.intersection_update(gdc_cnv.cnv_cols.values)
+        x4_5 = set(dm_cnv.cols.values)
+        x4_5.intersection_update(gdc_cnv.cols.values)
         x4_5 = list(x4_5)
         x4_5 = x4_4[x4_5].sort_values()
         x4_5 = list(x4_5.index)
 
-        x4_6 = set(gdc_expr.gdc_rows.values)
-        x4_6.intersection_update(gdc_cnv.gdc_rows.values)
+        x4_6 = set(gdc_expr.rows.values)
+        x4_6.intersection_update(gdc_cnv.rows.values)
         x4_6 = list(x4_6)
-        x4_6 = pd.Series(range(len(gdc_expr.gdc_rows)), index=gdc_expr.gdc_rows)[x4_6].sort_values().index
+        x4_6 = pd.Series(range(len(gdc_expr.rows)), index=gdc_expr.rows)[x4_6].sort_values().index
 
-        crispr = crispr.sel(depmap_rows=x4_1)
+        crispr = crispr.sel(rows=x4_1)
         crispr.data.data = dmlp.StandardScaler().fit_transform(crispr.data.data.astype('float32'))
 
-        dm_cnv = dm_cnv.sel(depmap_rows=x4_1, cnv_cols=x4_5)
+        dm_cnv = dm_cnv.sel(rows=x4_1, cols=x4_5)
         dm_cnv.data.data = dmlp.StandardScaler().fit_transform(dm_cnv.data.data.astype('float32'))
 
-        dm_expr = dm_expr.sel(depmap_rows=x4_1, expr_cols=x4_2)
+        dm_expr = dm_expr.sel(rows=x4_1, cols=x4_2)
         dm_expr.data.data = dmlp.StandardScaler().fit_transform(dm_expr.data.data.astype('float32'))
 
-        gdc_expr = gdc_expr.sel(gdc_rows=x4_6, expr_cols=x4_2)
+        gdc_expr = gdc_expr.sel(rows=x4_6, cols=x4_2)
         gdc_expr.data.data = dmlp.StandardScaler().fit_transform(gdc_expr.data.data.astype('float32'))
 
-        gdc_cnv = gdc_cnv.sel(gdc_rows=x4_6, cnv_cols=x4_5)
+        gdc_cnv = gdc_cnv.sel(rows=x4_6, cols=x4_5)
         gdc_cnv.data.data = dmlp.StandardScaler().fit_transform(gdc_cnv.data.data.astype('float32'))
 
         return SimpleNamespace(
@@ -282,31 +280,25 @@ class SVD:
         return self
 
 class model:
-    def __init__(self, merge, train_split, dims):
-        self.train_split = train_split
+    def __init__(self, merge, dims):
         self.dims = dims
         self.merge = merge
 
-        split = self.merge.dm_expr.depmap_rows
-        split['train'] = ('depmap_rows', np.random.random(split.depmap_rows.shape)<train_split)
-
         self.train = [
-            self.merge.dm_expr.sel(depmap_rows=split.train).data.data.persist(),
-            self.merge.crispr.sel(depmap_rows=split.train).data.data.persist(),
-            split.depmap_rows[split.train]
+            merge.X.sel(rows=merge.split.train).data.data.persist(),
+            merge.Y.sel(rows=merge.split.train).data.data.persist()
         ]
 
         self.test = [
-            self.merge.dm_expr.sel(depmap_rows=~split.train).data.data.persist(),
-            self.merge.crispr.sel(depmap_rows=~split.train).data.data.persist(),
-            split.depmap_rows[~split.train]
+            merge.X.sel(rows=~merge.split.train).data.data.persist(),
+            merge.Y.sel(rows=~merge.split.train).data.data.persist()
         ]
 
         fit = _score3(self.train[0], self.train[1], np.s_[:dims], np.s_[:]).cut(np.s_[:]).persist()
         fit = [
             fit.mult(self.train[0]),
             fit.mult(self.test[0]),
-            fit.mult(self.merge.gdc_expr.data.data)
+            fit.mult(merge.Z.data.data)
         ]
         fit = [x.persist() for x in fit]
         self.fit = fit
@@ -321,7 +313,7 @@ class model:
         ]
         stats = [x.compute() for x in stats]
         stats = pd.DataFrame(dict(
-            crispr_cols=self.merge.crispr.crispr_cols.values,
+            cols=merge.Y.cols.values,
             train=stats[0].ravel(),
             test=stats[1].ravel(),
             rand=stats[2].ravel()
@@ -339,17 +331,17 @@ class model:
             pd.DataFrame(dict(
                 pred = data[0],
                 obs = data[1],
-                CCLE_Name = self.merge.dm_expr.CCLE_Name.loc[self.train[2]].values
+                CCLE_Name = self.merge.X.CCLE_Name.loc[self.merge.split.train].values
             )),
             pd.DataFrame(dict(
                 pred = data[2],
                 obs = data[3],
-                CCLE_Name = self.merge.dm_expr.CCLE_Name.loc[self.test[2]].values
+                CCLE_Name = self.merge.X.CCLE_Name.loc[~self.merge.split.train].values
             )),
             pd.DataFrame(dict(
                 expr=data[4],
-                project_id=self.merge.gdc_expr.project_id.values,
-                is_normal=self.merge.gdc_expr.is_normal.values
+                project_id=self.merge.Z.project_id.values,
+                is_normal=self.merge.Z.is_normal.values
             )),
         ]
         return data
