@@ -16,6 +16,79 @@ import zarr
 
 config.exec()
 
+class SVD:
+    def __init__(self, u, s, v):
+        self.u = u
+        self.s = s
+        self.v = v
+
+    @staticmethod
+    def from_data(data, n = None, solver = 'full'):
+        if n is None:
+            n = min(*data.shape)
+
+        if solver == 'full':
+            svd = daa.linalg.svd(data)
+        elif solver == 'rand':
+            svd = daa.linalg.svd_compressed(data, n)
+        else:
+            raise ValueError('unknown solver')
+
+        return SVD(svd[0][:,:n], svd[1][:n], svd[2][:n,:].T)
+
+    def cut(self, n=None):
+        if n is None:
+            n = np.s_[:]
+        return SVD(self.u[:, n], self.s[n], self.v[:, n])
+
+    @property
+    def us(self):
+        return self.u * self.s.reshape(1, -1)
+
+    @property
+    def vs(self):
+        return self.v * self.s.reshape(1, -1)
+
+    @property
+    def usv(self):
+        return self.us @ self.v.T
+
+    @property
+    def perm(self):
+        return SVD(_perm(self.u), self.s, self.v)
+
+    def inv(self, l = 0):
+        return SVD(self.v, self.s/(l + self.s**2), self.u)
+
+    @property
+    def T(self):
+        return SVD(self.v, self.s, self.u)
+
+    def mult(self, x):
+        return SVD(x @ self.u, self.s, self.v)
+
+    def persist(self):
+        self.u = self.u.persist()
+        self.s = self.s.persist()
+        self.v = self.v.persist()
+        return self
+
+    @staticmethod
+    def from_xarray(x):
+        return SVD(x.u.data, x.s.data, x.v.data)
+
+    @property
+    def svd(self):
+        svd = SVD.from_data(self.us)
+        svd.v = self.v @ svd.v
+        return svd
+
+    def mult_svd(self, x):
+        svd = SVD.from_data(self.vs.T @ x.us)
+        svd.u = self.u @ svd.u
+        svd.v = x.v @ svd.v
+        return svd
+
 def _cache(path, x):
     meta = path/'meta.pickle'
     data = str(path/'data.zarr')
@@ -32,16 +105,30 @@ def _cache(path, x):
     x['data'] = (p[0], daa.from_zarr(zarr.open(data).astype('float32')))
     return x
 
+def _cache_svd(path, x):
+    meta = path/'meta.pickle'
+    u = str(path/'u.zarr')
+    v = str(path/'v.zarr')
+
+    if not path.exists():
+        x = x()
+        svd = SVD.from_data(x.data.data.astype('float32'))
+        svd.u.astype('float16').rechunk((1000, 1000)).to_zarr(u)
+        svd.v.astype('float16').rechunk((1000, 1000)).to_zarr(v)
+        x['s'] = ('pc', svd.s.persist())
+        with meta.open('wb') as file:
+            pickle.dump((x.data.dims, x.drop('data')), file)
+
+    with meta.open('rb') as file:
+        p = pickle.load(file)
+    x = p[1]
+    x['u'] = ((p[0][0], 'pc'), daa.from_zarr(zarr.open(u).astype('float32')))
+    x['v'] = ((p[0][1], 'pc'), daa.from_zarr(zarr.open(v).astype('float32')))
+    x['pc'] = np.arange(len(x.s))
+    return x
+
 def _perm(x):
     return x[np.random.permutation(x.shape[0]), :]
-
-def _score3(x8_4, x8_5, l, n1, n2):
-    x8_1 = SVD.from_data(x8_4).cut(n1).inv(l)
-    x8_2 = SVD.from_data(x8_5).cut(n2)
-    x8_3 = SVD.from_data(x8_1.vs.T @ x8_2.us)
-    x8_3.u = x8_1.u @ x8_3.u
-    x8_3.v = x8_2.v @ x8_3.v
-    return x8_3
 
 class merge:
     @lazy_property
@@ -203,15 +290,15 @@ class merge:
 
     @lazy_property
     def crispr(self):
-        return _cache(self.storage/'crispr', lambda: self._merge.crispr)
+        return _cache_svd(self.storage/'crispr'/'svd', lambda: self._merge.crispr)
 
     @lazy_property
     def dm_cnv(self):
-        return _cache(self.storage/'dm_cnv', lambda: self._merge.dm_cnv)
+        return _cache_svd(self.storage/'dm_cnv'/'svd', lambda: self._merge.dm_cnv)
 
     @lazy_property
     def dm_expr(self):
-        return _cache(self.storage/'dm_expr', lambda: self._merge.dm_expr)
+        return _cache_svd(self.storage/'dm_expr'/'svd', lambda: self._merge.dm_expr)
 
     @lazy_property
     def gdc_expr(self):
@@ -221,98 +308,36 @@ class merge:
     def gdc_cnv(self):
         return _cache(self.storage/'gdc_cnv', lambda: self._merge.gdc_cnv)
 
-class SVD:
-    def __init__(self, u, s, v):
-        self.u = u
-        self.s = s
-        self.v = v
-
-    @staticmethod
-    def from_data(data, n = None, solver = 'full'):
-        if n is None:
-            n = min(*data.shape)
-
-        if solver == 'full':
-            svd = daa.linalg.svd(data)
-        elif solver == 'rand':
-            svd = daa.linalg.svd_compressed(data, n)
-        else:
-            raise ValueError('unknown solver')
-
-        return SVD(svd[0][:,:n], svd[1][:n], svd[2][:n,:].T)
-
-    def cut(self, n=None):
-        if n is None:
-            n = np.s_[:]
-        return SVD(self.u[:, n], self.s[n], self.v[:, n])
-
-    @property
-    def us(self):
-        return self.u * self.s.reshape(1, -1)
-
-    @property
-    def vs(self):
-        return self.v * self.s.reshape(1, -1)
-
-    @property
-    def usv(self):
-        return self.us @ self.v.T
-
-    @property
-    def perm(self):
-        return SVD(_perm(self.u), self.s, self.v)
-
-    def inv(self, l = 0):
-        return SVD(self.v, self.s/(l + self.s**2), self.u)
-
-    @property
-    def T(self):
-        return SVD(self.v, self.s, self.u)
-
-    def mult(self, x):
-        return SVD(x @ self.u, self.s, self.v)
-
-    def persist(self):
-        self.u = self.u.persist()
-        self.s = self.s.persist()
-        self.v = self.v.persist()
-        return self
-
 class model:
     def __init__(self, merge, reg):
         self.reg = reg
         self.merge = merge
 
-        self.train = [
-            merge.X.sel(rows=merge.split.train).data.data.persist(),
-            merge.Y.sel(rows=merge.split.train).data.data.persist()
-        ]
-
-        self.test = [
-            merge.X.sel(rows=~merge.split.train).data.data.persist(),
-            merge.Y.sel(rows=~merge.split.train).data.data.persist()
-        ]
-
-        fit = _score3(self.train[0], self.train[1], reg[0], reg[1], np.s_[:]).cut(np.s_[:]).persist()
+        fit = merge.X.train.cut(reg[1]).inv(reg[0])
+        fit = fit.mult_svd(merge.Y.train.cut(np.s_[:])).cut(np.s_[:])
+        fit = fit.persist()
         fit = [
-            fit.mult(self.train[0]),
-            fit.mult(self.test[0]),
+            fit.mult(merge.X.train.usv),
+            fit.mult(merge.X.test),
             fit.mult(merge.Z.data.data)
         ]
         fit = [x.persist() for x in fit]
         self.fit = fit
 
-        perm = _perm(self.train[0])
-        perm_fit = _score3(perm, self.train[1], reg[0], reg[1], np.s_[:]).cut(np.s_[:]).persist()
-        perm_fit = perm_fit.mult(perm)
+        perm = merge.X.train.perm
+        perm_fit = perm.cut(reg[1]).inv(reg[0])
+        perm_fit = perm_fit.mult_svd(merge.Y.train.cut(np.s_[:])).cut(np.s_[:])
+        perm_fit = perm_fit.mult(perm.usv)
+        perm_fit = perm_fit.persist()
+
         stats = [
-            ((self.train[1] - self.fit[0].usv) ** 2).mean(axis=0),
-            ((self.test[1] - self.fit[1].usv) ** 2).mean(axis=0),
-            ((self.train[1] - perm_fit.usv) ** 2).mean(axis=0)
+            ((merge.Y.train.usv - self.fit[0].usv) ** 2).mean(axis=0),
+            ((merge.Y.test - self.fit[1].usv) ** 2).mean(axis=0),
+            ((merge.Y.train.usv - perm_fit.usv) ** 2).mean(axis=0)
         ]
         stats = [x.compute() for x in stats]
         stats = pd.DataFrame(dict(
-            cols=merge.Y.cols.values,
+            cols=merge.Y.x.cols.values,
             train=stats[0].ravel(),
             test=stats[1].ravel(),
             rand=stats[2].ravel()
