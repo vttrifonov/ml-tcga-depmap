@@ -37,31 +37,33 @@ def concat(x):
     x = xa.Dataset().assign(data=x)
     return x
 
-def split(x):
+def split1(x):
     return SimpleNamespace(
         x = x,
         train = gdf.SVD.from_xarray(x.sel(rows=m.split.train)).svd.persist(),
         test = gdf.SVD.from_xarray(x.sel(rows=~m.split.train)).usv.persist()
     )
 
-def model(x, y, z, reg):
-    m1 = SimpleNamespace(X = x, Y = y,Z = z)
-    m1 = gdf.model(m1, reg)
-    return m1
+def split2(x):
+    return SimpleNamespace(
+        x = x,
+        train = gdf.SVD.from_xarray(x.sel(rows=m.split.train)).usv.persist(),
+        test = gdf.SVD.from_xarray(x.sel(rows=~m.split.train)).usv.persist()
+    )
 
 m = gdf.merge()
 m.split = m.crispr.rows
 m.split['train'] = ('rows', np.random.random(m.split.rows.shape) < 0.8)
 ms = SimpleNamespace(
-    crispr = split(m.crispr),
-    dm_expr = split(m.dm_expr),
-    dm_cnv = split(m.dm_cnv)
+    crispr = split2(m.crispr),
+    dm_expr = split1(m.dm_expr),
+    dm_cnv = split1(m.dm_cnv)
 )
 
-m1 = model(ms.dm_expr, ms.crispr, m.gdc_expr, [0, np.s_[:400]])
-m2 = model(concat([m.dm_expr, m.dm_cnv]), ms.crispr, concat([m.gdc_expr, m.gdc_cnv]), [0, np.s_[:400]])
-m3 = model(ms.dm_cnv, ms.crispr, m.gdc_cnv, [0, np.s_[:400]])
-m4 = model(ms.dm_cnv, ms.dm_expr, m.dm_cnv, [0, np.s_[:400]])
+m1 = gdf.model(ms.dm_expr, ms.crispr, m.gdc_expr, [0, np.s_[:400]])
+m2 = gdf.model(concat([m.dm_expr, m.dm_cnv]), ms.crispr, concat([m.gdc_expr, m.gdc_cnv]), [0, np.s_[:400]])
+m3 = gdf.model(ms.dm_cnv, ms.crispr, m.gdc_cnv, [0, np.s_[:400]])
+m4 = gdf.model(ms.dm_cnv, ms.dm_expr, m.dm_cnv, [0, np.s_[:400]])
 
 x1 = gdf.SVD.from_data(m.dm_cnv.data.data)
 x2 = x1.s.compute()

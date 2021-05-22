@@ -64,8 +64,11 @@ class SVD:
     def T(self):
         return SVD(self.v, self.s, self.u)
 
-    def mult(self, x):
+    def lmult(self, x):
         return SVD(x @ self.u, self.s, self.v)
+
+    def rmult(self, x):
+        return SVD(self.u, self.s, x.T @ self.v)
 
     def persist(self):
         self.u = self.u.persist()
@@ -309,35 +312,37 @@ class merge:
         return _cache(self.storage/'gdc_cnv', lambda: self._merge.gdc_cnv)
 
 class model:
-    def __init__(self, merge, reg):
+    def __init__(self, x, y, z, reg):
         self.reg = reg
-        self.merge = merge
+        self.x = x
+        self.y = y
+        self.z = z
 
-        fit = merge.X.train.cut(reg[1]).inv(reg[0])
-        fit = fit.mult_svd(merge.Y.train.cut(np.s_[:])).cut(np.s_[:])
+        fit = x.train.cut(reg[1]).inv(reg[0])
+        fit = fit.rmult(y.train)
         fit = fit.persist()
         fit = [
-            fit.mult(merge.X.train.usv),
-            fit.mult(merge.X.test),
-            fit.mult(merge.Z.data.data)
+            fit.lmult(x.train.usv),
+            fit.lmult(x.test),
+            fit.lmult(z.data.data)
         ]
         fit = [x.persist() for x in fit]
         self.fit = fit
 
-        perm = merge.X.train.perm
+        perm = x.train.perm
         perm_fit = perm.cut(reg[1]).inv(reg[0])
-        perm_fit = perm_fit.mult_svd(merge.Y.train.cut(np.s_[:])).cut(np.s_[:])
-        perm_fit = perm_fit.mult(perm.usv)
+        perm_fit = perm_fit.rmult(y.train)
+        perm_fit = perm_fit.lmult(perm.usv)
         perm_fit = perm_fit.persist()
 
         stats = [
-            ((merge.Y.train.usv - self.fit[0].usv) ** 2).mean(axis=0),
-            ((merge.Y.test - self.fit[1].usv) ** 2).mean(axis=0),
-            ((merge.Y.train.usv - perm_fit.usv) ** 2).mean(axis=0)
+            ((y.train - self.fit[0].usv) ** 2).mean(axis=0),
+            ((y.test - self.fit[1].usv) ** 2).mean(axis=0),
+            ((y.train - perm_fit.usv) ** 2).mean(axis=0)
         ]
         stats = [x.compute() for x in stats]
         stats = pd.DataFrame(dict(
-            cols=merge.Y.x.cols.values,
+            cols=y.x.cols.values,
             train=stats[0].ravel(),
             test=stats[1].ravel(),
             rand=stats[2].ravel()
@@ -355,17 +360,17 @@ class model:
             pd.DataFrame(dict(
                 pred = data[0],
                 obs = data[1],
-                CCLE_Name = self.merge.X.CCLE_Name.loc[self.merge.split.train].values
+                CCLE_Name = self.x.CCLE_Name.loc[self.merge.split.train].values
             )),
             pd.DataFrame(dict(
                 pred = data[2],
                 obs = data[3],
-                CCLE_Name = self.merge.X.CCLE_Name.loc[~self.merge.split.train].values
+                CCLE_Name = self.x.CCLE_Name.loc[~self.merge.split.train].values
             )),
             pd.DataFrame(dict(
                 expr=data[4],
-                project_id=self.merge.Z.project_id.values,
-                is_normal=self.merge.Z.is_normal.values
+                project_id=self.z.project_id.values,
+                is_normal=self.z.is_normal.values
             )),
         ]
         return data
