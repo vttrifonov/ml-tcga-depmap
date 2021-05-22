@@ -45,18 +45,9 @@ def split(x):
     )
 
 def model(x, y, z, reg):
-    m1 = SimpleNamespace(
-        X = x,
-        Y = y,
-        Z = z
-    )
+    m1 = SimpleNamespace(X = x, Y = y,Z = z)
     m1 = gdf.model(m1, reg)
     return m1
-
-x, y, z, reg = (ms.dm_expr, ms.crispr, m.gdc_expr, [0, np.s_[:400]])
-merge = m1
-self = SimpleNamespace()
-
 
 m = gdf.merge()
 m.split = m.crispr.rows
@@ -70,7 +61,7 @@ ms = SimpleNamespace(
 m1 = model(ms.dm_expr, ms.crispr, m.gdc_expr, [0, np.s_[:400]])
 m2 = model(concat([m.dm_expr, m.dm_cnv]), ms.crispr, concat([m.gdc_expr, m.gdc_cnv]), [0, np.s_[:400]])
 m3 = model(ms.dm_cnv, ms.crispr, m.gdc_cnv, [0, np.s_[:400]])
-m4 = model(ms.dm_cnv, m.dm_expr, m.dm_cnv, [0, np.s_[:400]])
+m4 = model(ms.dm_cnv, ms.dm_expr, m.dm_cnv, [0, np.s_[:400]])
 
 x1 = gdf.SVD.from_data(m.dm_cnv.data.data)
 x2 = x1.s.compute()
