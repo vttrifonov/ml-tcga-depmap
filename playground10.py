@@ -9,6 +9,29 @@ import depmap_gdc_fit
 importlib.reload(depmap_gdc_fit)
 import depmap_gdc_fit as gdf
 
+m = gdf.merge()
+
+def obj(*args):
+    class _(*args):
+        pass
+    return _()
+
+x = obj()
+type(x).y = property(lambda self: 2)
+
+z = obj(x.__class__)
+type(z).y = property(lambda self: 3)
+
+m.crispr.mat
+m.dm_expr.mat
+m.dm_cnv.mat
+m.gdc_expr.mat
+m.gdc_cnv.mat
+
+m.dm_expr.svd.xarray
+m.dm_cnv.svd.xarray
+
+
 def plot1(m):
     plt.figure().gca().plot(sorted(m.stats.train), sorted(m.stats.rand), '.', alpha=0.1)
     plt.gcf().gca().axline(tuple([m.stats[['train', 'test']].min().min()]*2), slope=1)

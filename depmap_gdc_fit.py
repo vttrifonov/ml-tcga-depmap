@@ -13,6 +13,7 @@ from common.defs import lazy_property
 from helpers import config
 import pickle
 import zarr
+import xarray as xa
 
 config.exec()
 
@@ -23,18 +24,27 @@ class SVD:
         self.v = v
 
     @staticmethod
-    def from_data(data, n = None, solver = 'full'):
+    def from_mat(mat, n = None, solver = 'full'):
         if n is None:
-            n = min(*data.shape)
+            n = min(*mat.shape)
 
         if solver == 'full':
-            svd = daa.linalg.svd(data)
+            _svd = daa.linalg.svd(mat.data)
         elif solver == 'rand':
-            svd = daa.linalg.svd_compressed(data, n)
+            _svd = daa.linalg.svd_compressed(mat.data, n)
         else:
             raise ValueError('unknown solver')
 
-        return SVD(svd[0][:,:n], svd[1][:n], svd[2][:n,:].T)
+        _svd = (_svd[0][:,:n], _svd[1][:n], _svd[2][:n,:].T)
+
+        svd = xa.Dataset()
+        svd['u'] = ((mat.dims[0], 'pc'), _svd[0])
+        svd['s'] = ('pc', _svd[1])
+        svd['v'] = ((mat.dims[1], 'pc'), _svd[2])
+        svd['pc'] = np.arange(n)
+        svd = svd.merge(mat.coords)
+
+        return SVD(svd.u, svd.s, svd.v)
 
     def cut(self, n=None):
         if n is None:
@@ -71,10 +81,11 @@ class SVD:
         return SVD(self.u, self.s, x.T @ self.v)
 
     def persist(self):
-        self.u = self.u.persist()
-        self.s = self.s.persist()
-        self.v = self.v.persist()
-        return self
+        return SVD(
+            self.u.persist(),
+            self.s.persist(),
+            self.v.persist()
+        )
 
     @staticmethod
     def from_xarray(x):
@@ -86,11 +97,9 @@ class SVD:
         svd.v = self.v @ svd.v
         return svd
 
-    def mult_svd(self, x):
-        svd = SVD.from_data(self.vs.T @ x.us)
-        svd.u = self.u @ svd.u
-        svd.v = x.v @ svd.v
-        return svd
+    @property
+    def xarray(self):
+        return xa.merge([self.u, self.s, self.v])
 
 def _cache(path, x):
     meta = path/'meta.pickle'
@@ -98,6 +107,7 @@ def _cache(path, x):
 
     if not path.exists():
         x = x()
+
         x.data.data.astype('float16').rechunk((1000, 1000)).to_zarr(data)
         with meta.open('wb') as file:
             pickle.dump((x.data.dims, x.drop('data')), file)
@@ -132,6 +142,82 @@ def _cache_svd(path, x):
 
 def _perm(x):
     return x[np.random.permutation(x.shape[0]), :]
+
+def cache_zarr(path, data):
+    if not path.exists():
+        data().astype('float16').rechunk((1000, 1000)).to_zarr(str(path))
+    return daa.from_zarr(zarr.open(str(path)).astype('float32'))
+
+def cache_pickle(path, data):
+    if path.exists():
+        with path.open('rb') as file:
+            data = pickle.load(file)
+    else:
+        data = data()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open('wb') as file:
+            pickle.dump(data, file)
+    return data
+
+
+def raise_(error):
+    raise error
+
+def cache_mat(path, data):
+    if not path.exists():
+        data = data().copy()
+        coords = cache_pickle(path/'coords.pickle', lambda: (data.name, data.dims, data.coords))
+        data = cache_zarr(path / 'data.zarr', lambda: data.data)
+    else:
+        coords = cache_pickle(path/'coords.pickle', lambda: raise_(ValueError('missing coords')))
+        data = cache_zarr(path / 'data.zarr', lambda: raise_(ValueError('missing data')))
+
+    mat = xa.DataArray(
+        data,
+        name = coords[0],
+        dims = coords[1],
+        coords = coords[2],
+    )
+    return mat
+
+def cache_merge(path, mat):
+    if not path.exists():
+        mat = mat().copy()
+        cache_pickle(path/'annot.pickle', lambda: mat.drop('data'))
+        mat['data'] = cache_mat(path/'data', lambda: mat.data)
+        return mat
+    else:
+        mat =  cache_pickle(path/'annot.pickle', lambda: raise_(ValueError('missing annot')))
+        mat['data'] = cache_mat(path/'data', lambda: raise_(ValueError('missing data')))
+        return mat
+
+def cache_svd(path, svd):
+    if not path.exists():
+        svd = svd()
+        u = cache_mat(path/'u', lambda: svd.u)
+        s = cache_mat(path / 's', lambda: svd.s)
+        v = cache_mat(path / 'v', lambda: svd.v)
+    else:
+        u = cache_mat(path/'u', raise_(ValueError('missing u')))
+        s = cache_mat(path / 's', raise_(ValueError('missing s')))
+        v = cache_mat(path / 'v', raise_(ValueError('missing v')))
+    return SVD(u, s, v)
+
+class Mat:
+    def __init__(self, storage, data):
+        self.storage = storage
+        self.data = data
+
+    @lazy_property
+    def mat(self):
+        return cache_merge(self.storage, self.data)
+
+    @lazy_property
+    def svd(self):
+        return cache_svd(
+            self.storage/'svd',
+            lambda: SVD.from_mat(self.mat.data)
+        )
 
 class merge:
     @lazy_property
@@ -293,23 +379,23 @@ class merge:
 
     @lazy_property
     def crispr(self):
-        return _cache_svd(self.storage/'crispr'/'svd', lambda: self._merge.crispr)
+        return Mat(self.storage/'crispr', lambda:self._merge.crispr)
 
     @lazy_property
     def dm_cnv(self):
-        return _cache_svd(self.storage/'dm_cnv'/'svd', lambda: self._merge.dm_cnv)
+        return Mat(self.storage/'dm_cnv', lambda: self._merge.dm_cnv)
 
     @lazy_property
     def dm_expr(self):
-        return _cache_svd(self.storage/'dm_expr'/'svd', lambda: self._merge.dm_expr)
-
-    @lazy_property
-    def gdc_expr(self):
-        return _cache(self.storage/'gdc_expr', lambda: self._merge.gdc_expr)
+        return Mat(self.storage/'dm_expr', lambda: self._merge.dm_expr)
 
     @lazy_property
     def gdc_cnv(self):
-        return _cache(self.storage/'gdc_cnv', lambda: self._merge.gdc_cnv)
+        return Mat(self.storage/'gdc_cnv', lambda: self._merge.gdc_cnv)
+
+    @lazy_property
+    def gdc_expr(self):
+        return Mat(self.storage/'gdc_expr', lambda: self._merge.gdc_expr)
 
 class model:
     def __init__(self, x, y, z, reg):
