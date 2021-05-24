@@ -63,6 +63,11 @@ class CRISPR:
         data = data.merge(cols.set_index('cols').to_xarray())
         data['mat'] = (('rows', 'cols'), daa.from_zarr(mat))
 
+        data = data.merge(
+            self.release.samples.rename(columns={'DepMap_ID': 'rows'}).set_index('rows').to_xarray(),
+            join='inner'
+        )
+
         return data
 
 crispr = CRISPR()

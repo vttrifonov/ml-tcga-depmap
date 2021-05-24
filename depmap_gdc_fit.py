@@ -196,19 +196,11 @@ class merge:
     @lazy_property
     def _merge(self):
         crispr = depmap_crispr.data.copy()
-        crispr = crispr.merge(
-            depmap_crispr.release.samples.rename(columns={'DepMap_ID': 'rows'}).set_index('rows').to_xarray(),
-            join='inner'
-        )
         crispr = crispr.sel(cols=np.isnan(crispr.mat).sum(axis=0)==0)
         crispr['mat'] = (('rows', 'cols'), crispr.mat.data.rechunk(-1, 1000))
         crispr = crispr.rename({'mat': 'data'})
 
         dm_expr = depmap_expr.data.copy()
-        dm_expr = dm_expr.merge(
-            depmap_expr.release.samples.rename(columns={'DepMap_ID': 'rows'}).set_index('rows').to_xarray(),
-            join='inner'
-        )
         dm_expr = dm_expr.sel(cols=np.isnan(dm_expr.mat).sum(axis=0)==0)
         dm_expr['mat'] = (('rows', 'cols'), dm_expr.mat.data.rechunk(-1, 1000))
         dm_expr['mean'] = dm_expr.mat.mean(axis=0)
@@ -216,143 +208,102 @@ class merge:
         dm_expr = dm_expr.rename({'mat': 'data'})
 
         dm_cnv = depmap_cnv.data.copy()
-        dm_cnv = dm_cnv.merge(
-            depmap_cnv.release.samples.rename(columns={'DepMap_ID': 'rows'}).set_index('rows').to_xarray(),
-            join='inner'
-        )
         dm_cnv = dm_cnv.sel(cols=np.isnan(dm_cnv.mat).sum(axis=0)==0)
         dm_cnv['mat'] = (('rows', 'cols'), dm_cnv.mat.data.rechunk(-1, 1000))
         dm_cnv = dm_cnv.rename({'mat': 'data'})
 
-        x1_1 = _gdc_expr.col_entrez[['col', 'dbprimary_acc', 'display_label']]
-        x1_1 = x1_1.drop_duplicates()
-        x1_1 = x1_1.rename(columns={
-            'col': 'cols',
-            'dbprimary_acc': 'entrez',
-            'display_label': 'symbol'
-        })
-        x1_1['new_cols'] = x1_1.symbol + ' (' + x1_1.entrez + ')'
-        x1_1 = x1_1.query('new_cols.isin(@dm_expr.cols.values)').copy()
-        x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
-        x1_1 = x1_1.query('n==1 | cols.str.find("ENSGR")<0').copy()
-        x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
-        x1_1 = x1_1.query('n==1').copy()
-        del x1_1['n']
-        x1_1 = x1_1.set_index('cols').to_xarray()
+        def _new_cols(ds, filter_cols):
+            x1_1 = ds.col_entrez[['col', 'dbprimary_acc', 'display_label']]
+            x1_1 = x1_1.drop_duplicates()
+            x1_1 = x1_1.rename(columns={
+                'col': 'cols',
+                'dbprimary_acc': 'entrez',
+                'display_label': 'symbol'
+            })
+            x1_1['new_cols'] = x1_1.symbol + ' (' + x1_1.entrez + ')'
+            x1_1 = x1_1.query('new_cols.isin(@filter_cols)').copy()
+            x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
+            x1_1 = x1_1.query('n==1 | cols.str.find("ENSGR")<0').copy()
+            x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
+            x1_1 = x1_1.query('n==1').copy()
+            del x1_1['n']
+            x1_1 = x1_1.set_index('cols').to_xarray()
+            return x1_1
 
-        x5_1 = _gdc_expr.xarray[['rows', 'project_id', 'is_normal', 'case_id', 'sample_id']].to_dataframe().reset_index()
-        x5_1 = x5_1.rename(columns={'sample_id': 'new_rows'})
-        x5_2 = x5_1.drop(columns=['rows']).drop_duplicates()
-        x5_3 = x5_1[['rows', 'new_rows']].copy()
-        x5_3['w'] = x5_3.groupby('new_rows').new_rows.transform('size')
-        x5_3['w'] = 1/x5_3.w
-        x5_3['rows'] = pd.Series(range(x5_1.shape[0]), index=x5_1.rows)[x5_3.rows.to_numpy()].to_numpy()
-        x5_3['new_rows'] = pd.Series(range(x5_2.shape[0]), index=x5_2.new_rows)[x5_3.new_rows.to_numpy()].to_numpy()
-        x5_3 = daa.from_array(
-            sp.COO(x5_3[['new_rows', 'rows']].to_numpy().T, x5_3.w.astype('float32')),
-            chunks=(1000,-1)
-        )
+        def _new_rows(x5_1):
+            x5_1 = x5_1.to_dataframe().reset_index()
+            x5_1 = x5_1.rename(columns={'sample_id': 'new_rows'})
+            x5_2 = x5_1.drop(columns=['rows']).drop_duplicates()
+            x5_3 = x5_1[['rows', 'new_rows']].copy()
+            x5_3['w'] = x5_3.groupby('new_rows').new_rows.transform('size')
+            x5_3['w'] = 1/x5_3.w
+            x5_3['rows'] = pd.Series(range(x5_1.shape[0]), index=x5_1.rows)[x5_3.rows.to_numpy()].to_numpy()
+            x5_3['new_rows'] = pd.Series(range(x5_2.shape[0]), index=x5_2.new_rows)[x5_3.new_rows.to_numpy()].to_numpy()
+            x5_3 = daa.from_array(
+                sp.COO(x5_3[['new_rows', 'rows']].to_numpy().T, x5_3.w.astype('float32')),
+                chunks=(1000,-1)
+            )
+            return [x5_2, x5_3]
 
+        new_cols = _new_cols(_gdc_expr, dm_expr.cols.values)
+        new_rows = _new_rows(_gdc_expr.xarray[['rows', 'project_id', 'is_normal', 'case_id', 'sample_id']])
         gdc_expr = _gdc_expr.xarray[['data', 'rows', 'cols']]
-        gdc_expr = gdc_expr.sel(cols=x1_1.cols)
-        gdc_expr = gdc_expr.merge(x1_1)
+        gdc_expr = gdc_expr.sel(cols=new_cols.cols)
+        gdc_expr = gdc_expr.merge(new_cols)
         gdc_expr = gdc_expr.swap_dims({'cols': 'new_cols'}).drop('cols').rename({'new_cols': 'cols'})
-        gdc_expr = gdc_expr.merge(x5_2.set_index('new_rows'))
-        x5_3 = x5_3.rechunk((None, gdc_expr.data.chunks[0]))
-        gdc_expr['data'] = (('new_rows', 'cols'),  x5_3 @ gdc_expr.data.data.astype('float32'))
+        gdc_expr = gdc_expr.merge(new_rows[0].set_index('new_rows'))
+        new_rows[1] = new_rows[1].rechunk((None, gdc_expr.data.chunks[0]))
+        gdc_expr['data'] = (('new_rows', 'cols'),  new_rows[1] @ gdc_expr.data.data.astype('float32'))
         gdc_expr = gdc_expr.drop('rows').rename({'new_rows': 'rows'})
         gdc_expr['mean'] = gdc_expr.data.mean(axis=0).compute()
         gdc_expr = gdc_expr.sel(cols=gdc_expr['mean']>(-7))
 
-        x1_1 = _gdc_cnv.col_entrez[['col', 'dbprimary_acc', 'display_label']].copy()
-        x1_1 = x1_1.drop_duplicates()
-        x1_1 = x1_1.rename(columns={
-            'col': 'cols',
-            'dbprimary_acc': 'entrez',
-            'display_label': 'symbol'
-        })
-        x1_1['new_cols'] = x1_1.symbol + ' (' + x1_1.entrez + ')'
-        x1_1 = x1_1.query('new_cols.isin(@dm_cnv.cols.values)').copy()
-        x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
-        x1_1 = x1_1.query('n==1 | cols.str.find("ENSGR")<0').copy()
-        x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
-        x1_1 = x1_1.query('n==1').copy()
-        del x1_1['n']
-        x1_1 = x1_1.set_index('cols').to_xarray()
-
-        x5_1 = _gdc_cnv.xarray[['rows', 'project_id', 'case_id', 'sample_id']].to_dataframe().reset_index()
-        x5_1 = x5_1.rename(columns={'sample_id': 'new_rows'})
-        x5_2 = x5_1.drop(columns=['rows']).drop_duplicates()
-        x5_3 = x5_1[['rows', 'new_rows']].copy()
-        x5_3['w'] = x5_3.groupby('new_rows').new_rows.transform('size')
-        x5_3['w'] = 1/x5_3.w
-        x5_3['rows'] = pd.Series(range(x5_1.shape[0]), index=x5_1.rows)[x5_3.rows.to_numpy()].to_numpy()
-        x5_3['new_rows'] = pd.Series(range(x5_2.shape[0]), index=x5_2.new_rows)[x5_3.new_rows.to_numpy()].to_numpy()
-        x5_3 = daa.from_array(
-            sp.COO(x5_3[['new_rows', 'rows']].to_numpy().T, x5_3.w.astype('float32')),
-            chunks=(1000,-1)
-        )
-
+        new_cols = _new_cols(_gdc_cnv, dm_cnv.cols.values)
+        new_rows = _new_rows(_gdc_cnv.xarray[['rows', 'project_id','case_id', 'sample_id']])
         gdc_cnv = _gdc_cnv.xarray[['data', 'rows', 'cols']]
-        gdc_cnv = gdc_cnv.sel(cols=x1_1.cols)
-        gdc_cnv = gdc_cnv.merge(x1_1)
+        gdc_cnv = gdc_cnv.sel(cols=new_cols.cols)
+        gdc_cnv = gdc_cnv.merge(new_cols)
         gdc_cnv = gdc_cnv.sel(cols=np.isnan(gdc_cnv.data).sum(axis=0)==0)
         gdc_cnv = gdc_cnv.swap_dims({'cols': 'new_cols'}).drop('cols').rename({'new_cols': 'cols'})
-        gdc_cnv = gdc_cnv.merge(x5_2.set_index('new_rows'))
-        x5_3 = x5_3.rechunk((None, gdc_cnv.data.chunks[0]))
-        gdc_cnv['data'] = (('new_rows', 'cols'),  x5_3 @ gdc_cnv.data.data.astype('float32'))
+        gdc_cnv = gdc_cnv.merge(new_rows[0].set_index('new_rows'))
+        new_rows[1] = new_rows[1].rechunk((None, gdc_cnv.data.chunks[0]))
+        gdc_cnv['data'] = (('new_rows', 'cols'),  new_rows[1] @ gdc_cnv.data.data.astype('float32'))
         gdc_cnv = gdc_cnv.drop('rows').rename({'new_rows': 'rows'})
 
-        x4_1 = set(crispr.rows.values)
-        x4_1.intersection_update(dm_expr.rows.values)
-        x4_1.intersection_update(dm_cnv.rows.values)
-        x4_1 = list(x4_1)
+        depmap_rows = set(crispr.rows.values)
+        depmap_rows.intersection_update(dm_expr.rows.values)
+        depmap_rows.intersection_update(dm_cnv.rows.values)
+        depmap_rows = list(depmap_rows)
 
-        x4_3 = gdc_expr.cols.values
-        x4_3 = pd.Series(range(len(x4_3)), index=x4_3)
+        expr_cols = set(dm_expr.cols.values)
+        expr_cols.intersection_update(gdc_expr.cols.values)
+        expr_cols = list(expr_cols)
+        expr_cols = pd.Series(range(len(gdc_expr.cols)), index=gdc_expr.cols)[expr_cols].sort_values()
+        expr_cols = list(expr_cols.index)
 
-        x4_2 = set(dm_expr.cols.values)
-        x4_2.intersection_update(gdc_expr.cols.values)
-        x4_2 = list(x4_2)
-        x4_2 = x4_3[x4_2].sort_values()
-        x4_2 = list(x4_2.index)
+        cnv_cols = set(dm_cnv.cols.values)
+        cnv_cols.intersection_update(gdc_cnv.cols.values)
+        cnv_cols = list(cnv_cols)
+        cnv_cols = pd.Series(range(len(gdc_cnv.cols)), index=gdc_cnv.cols)[cnv_cols].sort_values()
+        cnv_cols = list(cnv_cols.index)
 
-        x4_4 = gdc_cnv.cols.values
-        x4_4 = pd.Series(range(len(x4_4)), index=x4_4)
+        gdc_rows = set(gdc_expr.rows.values)
+        gdc_rows.intersection_update(gdc_cnv.rows.values)
+        gdc_rows = list(gdc_rows)
+        gdc_rows = pd.Series(range(len(gdc_expr.rows)), index=gdc_expr.rows)[gdc_rows].sort_values().index
 
-        x4_5 = set(dm_cnv.cols.values)
-        x4_5.intersection_update(gdc_cnv.cols.values)
-        x4_5 = list(x4_5)
-        x4_5 = x4_4[x4_5].sort_values()
-        x4_5 = list(x4_5.index)
-
-        x4_6 = set(gdc_expr.rows.values)
-        x4_6.intersection_update(gdc_cnv.rows.values)
-        x4_6 = list(x4_6)
-        x4_6 = pd.Series(range(len(gdc_expr.rows)), index=gdc_expr.rows)[x4_6].sort_values().index
-
-        crispr = crispr.sel(rows=x4_1)
-        crispr.data.data = dmlp.StandardScaler().fit_transform(crispr.data.data.astype('float32'))
-
-        dm_cnv = dm_cnv.sel(rows=x4_1, cols=x4_5)
-        dm_cnv.data.data = dmlp.StandardScaler().fit_transform(dm_cnv.data.data.astype('float32'))
-
-        dm_expr = dm_expr.sel(rows=x4_1, cols=x4_2)
-        dm_expr.data.data = dmlp.StandardScaler().fit_transform(dm_expr.data.data.astype('float32'))
-
-        gdc_expr = gdc_expr.sel(rows=x4_6, cols=x4_2)
-        gdc_expr.data.data = dmlp.StandardScaler().fit_transform(gdc_expr.data.data.astype('float32'))
-
-        gdc_cnv = gdc_cnv.sel(rows=x4_6, cols=x4_5)
-        gdc_cnv.data.data = dmlp.StandardScaler().fit_transform(gdc_cnv.data.data.astype('float32'))
-
-        return SimpleNamespace(
-            crispr = crispr,
-            dm_cnv = dm_cnv,
-            dm_expr = dm_expr,
-            gdc_expr = gdc_expr,
-            gdc_cnv = gdc_cnv
+        data = dict(
+            crispr=crispr.sel(rows=depmap_rows),
+            dm_cnv=dm_cnv.sel(rows=depmap_rows, cols=cnv_cols),
+            dm_expr=dm_expr.sel(rows=depmap_rows, cols=expr_cols),
+            gdc_cnv=gdc_cnv.sel(rows=gdc_rows, cols=cnv_cols),
+            gdc_expr=gdc_expr.sel(rows=gdc_rows, cols=expr_cols)
         )
+
+        for v in data.values():
+            v.data.data = dmlp.StandardScaler().fit_transform(v.data.data.astype('float32'))
+
+        return SimpleNamespace(**data)
 
     @lazy_property
     def crispr(self):
