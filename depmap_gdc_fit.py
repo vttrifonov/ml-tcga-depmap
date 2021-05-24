@@ -169,7 +169,7 @@ class Mat:
     def __init__(self, mat, svd = None):
         self._mat = mat
         if svd is None:
-            svd = lambda: SVD.from_mat(mat.data)
+            svd = lambda: SVD.from_mat(self.mat.data)
         self._svd = svd
 
     @lazy_property
@@ -368,6 +368,13 @@ class merge:
     @lazy_property
     def gdc_expr(self):
         return Mat.cached(self.storage/'gdc_expr', lambda: self._merge.gdc_expr)
+
+def concat(x):
+    x = (y.data.copy() for y in x)
+    x = (y.assign_coords({'cols': str(i) + ':' + y.cols}) for i, y in enumerate(x))
+    x = xa.concat(x, 'cols')
+    x = xa.Dataset().assign(data=x)
+    return x
 
 class model:
     def __init__(self, x, y, z, reg):

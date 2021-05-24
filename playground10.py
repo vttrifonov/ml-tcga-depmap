@@ -9,17 +9,6 @@ import depmap_gdc_fit
 importlib.reload(depmap_gdc_fit)
 import depmap_gdc_fit as gdf
 
-m = gdf.merge()
-
-m.crispr.mat
-m.dm_expr.mat
-m.dm_cnv.mat
-m.gdc_expr.mat
-m.gdc_cnv.mat
-
-m.dm_expr.svd.xarray
-m.dm_cnv.svd.xarray
-
 def plot1(m):
     plt.figure().gca().plot(sorted(m.stats.train), sorted(m.stats.rand), '.', alpha=0.1)
     plt.gcf().gca().axline(tuple([m.stats[['train', 'test']].min().min()]*2), slope=1)
@@ -41,34 +30,25 @@ def plot4(d):
         color='project_id', symbol='is_normal'
     ).show()
 
-def concat(x):
-    x = (y.data.copy() for y in x)
-    x = (y.assign_coords({'cols': str(i) + ':' + y.cols}) for i, y in enumerate(x))
-    x = xa.concat(x, 'cols')
-    x = xa.Dataset().assign(data=x)
-    return x
-
-def mat1(x):
-    return SimpleNamespace(
-        mat = x,
-        svd = gdf.SVD.from_mat(x.data),
-    )
-
 m = gdf.merge()
 m.split = m.crispr.mat.rows
 m.split['train'] = ('rows', np.random.random(m.split.rows.shape) < 0.8)
 ms = SimpleNamespace(
-    crispr = gdf.model.splity(m.crispr, m.split),
-    dm_expr = gdf.model.splitx(m.dm_expr, m.split),
-    dm_expr1 = gdf.model.splity(m.dm_expr, m.split),
-    dm_cnv = gdf.model.splitx(m.dm_cnv, m.split),
-    dm_expr_cnv = gdf.model.splitx(mat1(concat([m.dm_expr.mat, m.dm_cnv.mat])), m.split)
+    x = SimpleNamespace(
+        dm_expr = gdf.model.splitx(m.dm_expr, m.split),
+        dm_cnv = gdf.model.splitx(m.dm_cnv, m.split),
+        dm_expr_cnv = gdf.model.splitx(gdf.Mat(lambda: gdf.concat([m.dm_expr.mat, m.dm_cnv.mat])), m.split)
+    ),
+    y = SimpleNamespace(
+        crispr = gdf.model.splity(m.crispr, m.split),
+        dm_expr = gdf.model.splity(m.dm_expr, m.split)
+    )
 )
 
-m1 = gdf.model(ms.dm_expr, ms.crispr, m.gdc_expr.mat, [0, np.s_[:400]])
-m2 = gdf.model(ms.dm_expr_cnv, ms.crispr, concat([m.gdc_expr.mat, m.gdc_cnv.mat]), [0, np.s_[:400]])
-m3 = gdf.model(ms.dm_cnv, ms.crispr, m.gdc_cnv.mat, [0, np.s_[:400]])
-m4 = gdf.model(ms.dm_cnv, ms.dm_expr1, m.dm_cnv.mat, [0, np.s_[:400]])
+m1 = gdf.model(ms.x.dm_expr, ms.y.crispr, m.gdc_expr.mat, [0, np.s_[:400]])
+m2 = gdf.model(ms.x.dm_expr_cnv, ms.y.crispr, gdf.concat([m.gdc_expr.mat, m.gdc_cnv.mat]), [0, np.s_[:400]])
+m3 = gdf.model(ms.x.dm_cnv, ms.y.crispr, m.gdc_cnv.mat, [0, np.s_[:400]])
+m4 = gdf.model(ms.x.dm_cnv, ms.y.dm_expr, m.dm_cnv.mat, [0, np.s_[:400]])
 
 x1 = gdf.SVD.from_data(m.dm_cnv.data.data)
 x2 = x1.s.compute()
