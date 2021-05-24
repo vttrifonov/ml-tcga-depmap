@@ -53,11 +53,11 @@ class SVD:
 
     @property
     def us(self):
-        return self.u * self.s.reshape(1, -1)
+        return self.u * self.s
 
     @property
     def vs(self):
-        return self.v * self.s.reshape(1, -1)
+        return self.v * self.s
 
     @property
     def usv(self):
@@ -65,7 +65,9 @@ class SVD:
 
     @property
     def perm(self):
-        return SVD(_perm(self.u), self.s, self.v)
+        u = _perm(self.u)
+        u['rows'] = self.u.rows
+        return SVD(u, self.s, self.v)
 
     def inv(self, l = 0):
         return SVD(self.v, self.s/(l + self.s**2), self.u)
@@ -89,56 +91,18 @@ class SVD:
 
     @staticmethod
     def from_xarray(x):
-        return SVD(x.u.data, x.s.data, x.v.data)
+        return SVD(x.u, x.s, x.v)
 
     @property
-    def svd(self):
-        svd = SVD.from_data(self.us)
+    def lsvd(self):
+        svd = SVD.from_mat(self.us)
         svd.v = self.v @ svd.v
         return svd
 
     @property
     def xarray(self):
-        return xa.merge([self.u, self.s, self.v])
+        return xa.merge([self.u.rename('u'), self.s.rename('s'), self.v.rename('v')])
 
-def _cache(path, x):
-    meta = path/'meta.pickle'
-    data = str(path/'data.zarr')
-
-    if not path.exists():
-        x = x()
-
-        x.data.data.astype('float16').rechunk((1000, 1000)).to_zarr(data)
-        with meta.open('wb') as file:
-            pickle.dump((x.data.dims, x.drop('data')), file)
-
-    with meta.open('rb') as file:
-        p = pickle.load(file)
-    x = p[1]
-    x['data'] = (p[0], daa.from_zarr(zarr.open(data).astype('float32')))
-    return x
-
-def _cache_svd(path, x):
-    meta = path/'meta.pickle'
-    u = str(path/'u.zarr')
-    v = str(path/'v.zarr')
-
-    if not path.exists():
-        x = x()
-        svd = SVD.from_data(x.data.data.astype('float32'))
-        svd.u.astype('float16').rechunk((1000, 1000)).to_zarr(u)
-        svd.v.astype('float16').rechunk((1000, 1000)).to_zarr(v)
-        x['s'] = ('pc', svd.s.persist())
-        with meta.open('wb') as file:
-            pickle.dump((x.data.dims, x.drop('data')), file)
-
-    with meta.open('rb') as file:
-        p = pickle.load(file)
-    x = p[1]
-    x['u'] = ((p[0][0], 'pc'), daa.from_zarr(zarr.open(u).astype('float32')))
-    x['v'] = ((p[0][1], 'pc'), daa.from_zarr(zarr.open(v).astype('float32')))
-    x['pc'] = np.arange(len(x.s))
-    return x
 
 def _perm(x):
     return x[np.random.permutation(x.shape[0]), :]
@@ -159,65 +123,73 @@ def cache_pickle(path, data):
             pickle.dump(data, file)
     return data
 
-
 def raise_(error):
     raise error
 
-def cache_mat(path, data):
+def cache_da(path, da):
     if not path.exists():
-        data = data().copy()
-        coords = cache_pickle(path/'coords.pickle', lambda: (data.name, data.dims, data.coords))
-        data = cache_zarr(path / 'data.zarr', lambda: data.data)
+        da = da().copy()
+        values = cache_zarr(path / 'values.zarr', lambda: da.data)
+        args = cache_pickle(
+            path/'args.pickle',
+            lambda: {'name': da.name, 'dims': da.dims, 'coords': da.coords, 'attrs': da.attrs}
+        )
     else:
-        coords = cache_pickle(path/'coords.pickle', lambda: raise_(ValueError('missing coords')))
-        data = cache_zarr(path / 'data.zarr', lambda: raise_(ValueError('missing data')))
+        args = cache_pickle(path/'args.pickle', lambda: raise_(ValueError('missing args')))
+        values = cache_zarr(path / 'values.zarr', lambda: raise_(ValueError('missing values')))
 
-    mat = xa.DataArray(
-        data,
-        name = coords[0],
-        dims = coords[1],
-        coords = coords[2],
-    )
-    return mat
+    da = xa.DataArray(values, **args)
+    return da
 
-def cache_merge(path, mat):
+def cache_ds(path, ds):
     if not path.exists():
-        mat = mat().copy()
-        cache_pickle(path/'annot.pickle', lambda: mat.drop('data'))
-        mat['data'] = cache_mat(path/'data', lambda: mat.data)
-        return mat
+        ds = ds().copy()
+        cache_pickle(path/'non-data.pickle', lambda: ds.drop('data'))
+        ds['data'] = cache_da(path/'data', lambda: ds.data)
+        return ds
     else:
-        mat =  cache_pickle(path/'annot.pickle', lambda: raise_(ValueError('missing annot')))
-        mat['data'] = cache_mat(path/'data', lambda: raise_(ValueError('missing data')))
-        return mat
+        ds = cache_pickle(path/'non-data.pickle', lambda: raise_(ValueError('missing non-data')))
+        ds['data'] = cache_da(path/'data', lambda: raise_(ValueError('missing data')))
+        return ds
 
 def cache_svd(path, svd):
     if not path.exists():
         svd = svd()
-        u = cache_mat(path/'u', lambda: svd.u)
-        s = cache_mat(path / 's', lambda: svd.s)
-        v = cache_mat(path / 'v', lambda: svd.v)
+        u = cache_da(path/'u', lambda: svd.u)
+        s = cache_da(path / 's', lambda: svd.s)
+        v = cache_da(path / 'v', lambda: svd.v)
     else:
-        u = cache_mat(path/'u', raise_(ValueError('missing u')))
-        s = cache_mat(path / 's', raise_(ValueError('missing s')))
-        v = cache_mat(path / 'v', raise_(ValueError('missing v')))
+        u = cache_da(path/'u', lambda: raise_(ValueError('missing u')))
+        s = cache_da(path / 's', lambda: raise_(ValueError('missing s')))
+        v = cache_da(path / 'v', lambda: raise_(ValueError('missing v')))
     return SVD(u, s, v)
 
+
 class Mat:
-    def __init__(self, storage, data):
-        self.storage = storage
-        self.data = data
+    def __init__(self, mat, svd = None):
+        self._mat = mat
+        if svd is None:
+            svd = lambda: SVD.from_mat(mat.data)
+        self._svd = svd
 
     @lazy_property
     def mat(self):
-        return cache_merge(self.storage, self.data)
+        return self._mat()
 
     @lazy_property
     def svd(self):
-        return cache_svd(
-            self.storage/'svd',
-            lambda: SVD.from_mat(self.mat.data)
+        return self._svd()
+
+    @staticmethod
+    def cached(storage, mat):
+        return Mat(
+            cache_ds(storage, mat),
+            cache_svd(
+                storage / 'svd',
+                lambda: SVD.from_mat(mat.data)
+            )
         )
+
 
 class merge:
     @lazy_property
@@ -379,23 +351,23 @@ class merge:
 
     @lazy_property
     def crispr(self):
-        return Mat(self.storage/'crispr', lambda:self._merge.crispr)
+        return Mat.cached(self.storage/'crispr', lambda:self._merge.crispr)
 
     @lazy_property
     def dm_cnv(self):
-        return Mat(self.storage/'dm_cnv', lambda: self._merge.dm_cnv)
+        return Mat.cached(self.storage/'dm_cnv', lambda: self._merge.dm_cnv)
 
     @lazy_property
     def dm_expr(self):
-        return Mat(self.storage/'dm_expr', lambda: self._merge.dm_expr)
+        return Mat.cached(self.storage/'dm_expr', lambda: self._merge.dm_expr)
 
     @lazy_property
     def gdc_cnv(self):
-        return Mat(self.storage/'gdc_cnv', lambda: self._merge.gdc_cnv)
+        return Mat.cached(self.storage/'gdc_cnv', lambda: self._merge.gdc_cnv)
 
     @lazy_property
     def gdc_expr(self):
-        return Mat(self.storage/'gdc_expr', lambda: self._merge.gdc_expr)
+        return Mat.cached(self.storage/'gdc_expr', lambda: self._merge.gdc_expr)
 
 class model:
     def __init__(self, x, y, z, reg):
@@ -407,13 +379,13 @@ class model:
         fit = x.train.cut(reg[1]).inv(reg[0])
         fit = fit.rmult(y.train)
         fit = fit.persist()
-        fit = [
-            fit.lmult(x.train.usv),
-            fit.lmult(x.test),
-            fit.lmult(z.data.data)
-        ]
-        fit = [x.persist() for x in fit]
-        self.fit = fit
+        fit = dict(
+            train=fit.lmult(x.train.usv),
+            test=fit.lmult(x.test),
+            pred=fit.lmult(z.data)
+        )
+        fit = {k: v.persist() for k, v in fit.items()}
+        self.fit = SimpleNamespace(**fit)
 
         perm = x.train.perm
         perm_fit = perm.cut(reg[1]).inv(reg[0])
@@ -421,17 +393,15 @@ class model:
         perm_fit = perm_fit.lmult(perm.usv)
         perm_fit = perm_fit.persist()
 
-        stats = [
-            ((y.train - self.fit[0].usv) ** 2).mean(axis=0),
-            ((y.test - self.fit[1].usv) ** 2).mean(axis=0),
-            ((y.train - perm_fit.usv) ** 2).mean(axis=0)
-        ]
-        stats = [x.compute() for x in stats]
+        stats = dict(
+            train=((y.train - self.fit.train.usv) ** 2).mean(axis=0),
+            test=((y.test - self.fit.test.usv) ** 2).mean(axis=0),
+            rand=((y.train - perm_fit.usv) ** 2).mean(axis=0)
+        )
+        stats = {k: v.compute().data.ravel() for k, v in stats.items()}
         stats = pd.DataFrame(dict(
-            cols=y.x.cols.values,
-            train=stats[0].ravel(),
-            test=stats[1].ravel(),
-            rand=stats[2].ravel()
+            cols=y.train.cols.values,
+            **stats
         ))
         self.stats = stats
 
@@ -460,4 +430,20 @@ class model:
             )),
         ]
         return data
+
+    @staticmethod
+    def splitx(x, split):
+        return SimpleNamespace(
+            x = x,
+            train = SVD.from_xarray(x.svd.xarray.sel(rows=split.train).rename({'pc': '__tmp_pc__'})).lsvd.persist(),
+            test = x.mat.sel(rows=~split.train).data.persist()
+        )
+
+    @staticmethod
+    def splity(x, split):
+        return SimpleNamespace(
+            x = x,
+            train = x.mat.sel(rows=split.train).data.persist(),
+            test = x.mat.sel(rows=~split.train).data.persist()
+        )
 
