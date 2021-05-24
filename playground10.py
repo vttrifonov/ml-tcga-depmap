@@ -31,6 +31,16 @@ def plot4(d):
     ).show()
 
 m = gdf.merge()
+
+m.crispr.mat
+m.dm_expr.mat
+m.dm_cnv.mat
+m.gdc_expr.mat
+m.gdc_cnv.mat
+
+m.dm_expr.svd
+m.dm_cnv.svd
+
 m.split = m.crispr.mat.rows
 m.split['train'] = ('rows', np.random.random(m.split.rows.shape) < 0.8)
 ms = SimpleNamespace(

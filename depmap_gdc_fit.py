@@ -103,7 +103,6 @@ class SVD:
     def xarray(self):
         return xa.merge([self.u.rename('u'), self.s.rename('s'), self.v.rename('v')])
 
-
 def _perm(x):
     return x[np.random.permutation(x.shape[0]), :]
 
@@ -164,7 +163,6 @@ def cache_svd(path, svd):
         v = cache_da(path / 'v', lambda: raise_(ValueError('missing v')))
     return SVD(u, s, v)
 
-
 class Mat:
     def __init__(self, mat, svd = None):
         self._mat = mat
@@ -183,13 +181,12 @@ class Mat:
     @staticmethod
     def cached(storage, mat):
         return Mat(
-            cache_ds(storage, mat),
-            cache_svd(
+            lambda: cache_ds(storage, mat),
+            lambda: cache_svd(
                 storage / 'svd',
-                lambda: SVD.from_mat(mat.data)
+                lambda: SVD.from_mat(mat().data)
             )
         )
-
 
 class merge:
     @lazy_property
@@ -199,6 +196,10 @@ class merge:
     @lazy_property
     def _merge(self):
         crispr = depmap_crispr.data.copy()
+        crispr = crispr.merge(
+            depmap_crispr.release.samples.rename(columns={'DepMap_ID': 'rows'}).set_index('rows').to_xarray(),
+            join='inner'
+        )
         crispr = crispr.sel(cols=np.isnan(crispr.mat).sum(axis=0)==0)
         crispr['mat'] = (('rows', 'cols'), crispr.mat.data.rechunk(-1, 1000))
         crispr = crispr.rename({'mat': 'data'})
@@ -215,6 +216,10 @@ class merge:
         dm_expr = dm_expr.rename({'mat': 'data'})
 
         dm_cnv = depmap_cnv.data.copy()
+        dm_cnv = dm_cnv.merge(
+            depmap_cnv.release.samples.rename(columns={'DepMap_ID': 'rows'}).set_index('rows').to_xarray(),
+            join='inner'
+        )
         dm_cnv = dm_cnv.sel(cols=np.isnan(dm_cnv.mat).sum(axis=0)==0)
         dm_cnv['mat'] = (('rows', 'cols'), dm_cnv.mat.data.rechunk(-1, 1000))
         dm_cnv = dm_cnv.rename({'mat': 'data'})
@@ -351,7 +356,7 @@ class merge:
 
     @lazy_property
     def crispr(self):
-        return Mat.cached(self.storage/'crispr', lambda:self._merge.crispr)
+        return Mat.cached(self.storage/'crispr', lambda: self._merge.crispr)
 
     @lazy_property
     def dm_cnv(self):
@@ -384,7 +389,7 @@ class model:
         self.z = z
 
         fit = x.train.cut(reg[1]).inv(reg[0])
-        fit = fit.rmult(y.train)
+        fit = fit.rmult(y.train.data)
         fit = fit.persist()
         fit = dict(
             train=fit.lmult(x.train.usv),
@@ -396,14 +401,14 @@ class model:
 
         perm = x.train.perm
         perm_fit = perm.cut(reg[1]).inv(reg[0])
-        perm_fit = perm_fit.rmult(y.train)
+        perm_fit = perm_fit.rmult(y.train.data)
         perm_fit = perm_fit.lmult(perm.usv)
         perm_fit = perm_fit.persist()
 
         stats = dict(
-            train=((y.train - self.fit.train.usv) ** 2).mean(axis=0),
-            test=((y.test - self.fit.test.usv) ** 2).mean(axis=0),
-            rand=((y.train - perm_fit.usv) ** 2).mean(axis=0)
+            train=((y.train.data - self.fit.train.usv) ** 2).mean(axis=0),
+            test=((y.test.data - self.fit.test.usv) ** 2).mean(axis=0),
+            rand=((y.train.data - perm_fit.usv) ** 2).mean(axis=0)
         )
         stats = {k: v.compute().data.ravel() for k, v in stats.items()}
         stats = pd.DataFrame(dict(
@@ -414,21 +419,21 @@ class model:
 
     def data(self, idx):
         data = [
-            self.fit[0].usv[:,idx], self.train[1][:,idx],
-            self.fit[1].usv[:,idx], self.test[1][:,idx],
-            self.fit[2].usv[:,idx]
+            self.fit.train.usv[:,idx], self.y.train.data[:,idx],
+            self.fit.test.usv[:,idx], self.y.test.data[:,idx],
+            self.fit.pred.usv[:,idx]
         ]
         data = [x.compute() for x in data]
         data = [
             pd.DataFrame(dict(
                 pred = data[0],
                 obs = data[1],
-                CCLE_Name = self.x.CCLE_Name.loc[self.merge.split.train].values
+                CCLE_Name = self.y.train.CCLE_Name.values
             )),
             pd.DataFrame(dict(
                 pred = data[2],
                 obs = data[3],
-                CCLE_Name = self.x.CCLE_Name.loc[~self.merge.split.train].values
+                CCLE_Name = self.y.test.CCLE_Name.values
             )),
             pd.DataFrame(dict(
                 expr=data[4],
@@ -450,7 +455,7 @@ class model:
     def splity(x, split):
         return SimpleNamespace(
             x = x,
-            train = x.mat.sel(rows=split.train).data.persist(),
-            test = x.mat.sel(rows=~split.train).data.persist()
+            train = x.mat.sel(rows=split.train).persist(),
+            test = x.mat.sel(rows=~split.train).persist()
         )
 
