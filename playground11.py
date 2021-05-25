@@ -10,117 +10,72 @@ from pathlib import Path
 import xarray as xa
 import pickle
 import numpy as np
+import pandas as pd
+import importlib
+import dask_ml.preprocessing as dmlp
 
-m = gdf.merge()._merge
+import depmap_gdc_fit
+importlib.reload(depmap_gdc_fit)
+import depmap_gdc_fit as gdf
 
-def _zarr_data(path, data):
-    if not path.exists():
-        data().astype('float16').rechunk((1000, 1000)).to_zarr(str(path))
-    return daa.from_zarr(zarr.open(str(path)).astype('float32'))
+m = gdf.merge()
 
-def _pickle_data(path, data):
-    if path.exists():
-        with path.open('rb') as file:
-            data = pickle.load(file)
-    else:
-        data = data()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open('wb') as file:
-            pickle.dump(data, file)
-    return data
+cnv = m.dm_cnv.mat.copy()
+map = cnv.map_location.to_dataframe()
+map['chr'] = map.map_location.str.replace('[pq].*$', '', regex=True)
+map['pq'] = map.map_location.str.replace('^.*([pq]).*$', r'\1', regex=True)
+map['loc'] = map.map_location.str.replace('^.*[pq]', '', regex=True)
+map['loc'] = pd.to_numeric(map['loc'], errors='coerce')
+map['loc'] = (2*(map.pq=='p')-1)*map['loc']
+map = map.sort_values(['chr', 'loc'])
+cnv = cnv.merge(map[['chr', 'loc']])
+cnv = cnv.sel(cols=map.index)
+cnv = cnv.sel(cols=~cnv['loc'].isnull())
+cnv.data.values = cnv.data.data.rechunk('auto').persist()
 
-class Mat:
-    @lazy_property
-    def rows(self):
-        return _pickle_data(
-            self.storage / 'rows',
-            lambda: self._data.drop_dims('cols')
-        )
+cyto = cnv.map_location.to_dataframe()
+cyto = pd.get_dummies(cyto)
+cyto = xa.DataArray(
+    cyto,
+    dims=('cols', 'locs'),
+    coords=dict(
+        cols = cyto.index,
+        locs = cyto.columns
+    ),
+    name='cytoband'
+)
+cyto.values = daa.from_array(cyto.values)
+cyto = cyto.sel(locs=cyto.sum(axis=0)>10)
+cyto = cyto.sel(cols=cyto.sum(axis=1)>0)
+cyto.data = dmlp.StandardScaler().fit_transform(cyto.data)
+cyto = SimpleNamespace(
+    mat = cyto,
+    svd = gdf.SVD.from_mat(cyto).persist()
+)
 
-    @lazy_property
-    def cols(self):
-        return _pickle_data(
-            self.storage / 'cols',
-            lambda: self._data.drop_dims('rows')
-        )
+cnv = cnv.sel(cols=cyto.mat.cols)
 
-    @lazy_property
-    def data(self):
-        return _zarr_data(
-            self.storage/'data.zarr',
-            lambda: self._data.data.data
-        )
+x1 = cnv.data.T
+x2 = cyto.svd
+x2 = x2.u @ (x2.u.T @ x1)
+cnv['resid'] = (x1 - x2).T.persist()
+(cnv.resid**2).mean().compute()
+plt.plot(cnv.resid.mean(axis=0), cnv.resid.std(axis=0), '.')
+cnv['resid'] = dmlp.StandardScaler().fit_transform(cnv.resid).persist()
+resid = gdf.Mat(lambda: cnv[['resid']].rename({'resid': 'data'}))
 
-    @property
-    def xarray(self):
-        return xa.merge([
-            self.rows,
-            self.cols,
-        ]).assign(
-            data=(('rows', 'cols'), self.data)
-        )
+x1 = m.crispr.mat.data
+x2 = resid.svd.cut(np.s_[:500])
+x2 = x2.u @ (x2.u.T @ x1)
+x2 = x2.persist()
 
-    class SVD:
-        def __init__(self, mat):
-            self.mat = mat
+x3 = resid.svd.cut(np.s_[:500]).perm
+x3 = x3.u @ (x3.u.T @ x1)
+x3 = x3.persist()
 
-        @lazy_property
-        def _svd(self):
-            return gdf.SVD.from_data(self.mat.data)
+plt.plot(
+    sorted(((x1-x2)**2).mean(axis=0).values),
+    sorted(((x1-x3)**2).mean(axis=0).values),
+    '.'
+)
 
-        @lazy_property
-        def u(self):
-            return _zarr_data(
-                self.storage / 'u.zarr',
-                lambda: self._svd.u
-            )
-
-        @lazy_property
-        def s(self):
-            return _zarr_data(
-                self.storage / 's.pickle',
-                lambda: self._svd.s.persist()
-            )
-
-        @lazy_property
-        def v(self):
-            return _zarr_data(
-                self.storage / 'v.zarr',
-                lambda: self._svd.v
-            )
-
-        @lazy_property
-        def pc(self):
-            return xa.Dataset({'pc': np.arange(len(self.s))})
-
-        @property
-        def rows(self):
-            return self.mat.rows
-
-        @property
-        def cols(self):
-            return self.mat.cols
-
-        @lazy_property
-        def xarray(self):
-            return xa.merge([
-                self.rows,
-                self.cols,
-                self.pc
-            ]).assign(
-                u=(('rows', 'pc'), self.u),
-                s=('pc', self.s),
-                v=(('cols', 'pc'), self.v),
-            )
-
-    @lazy_property
-    def svd(self):
-        svd = self.SVD(self)
-        svd.storage = self.storage/'svd'
-        return svd
-
-x1 = Mat()
-x1._data = m.dm_expr
-x1.storage = Path('tmp')
-x1.xarray
-x1.svd.xarray

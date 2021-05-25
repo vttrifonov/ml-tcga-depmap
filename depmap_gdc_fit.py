@@ -66,7 +66,7 @@ class SVD:
     @property
     def perm(self):
         u = _perm(self.u)
-        u['rows'] = self.u.rows
+        u[u.dims[0]] = self.u[u.dims[0]]
         return SVD(u, self.s, self.v)
 
     def inv(self, l = 0):
@@ -102,6 +102,12 @@ class SVD:
     @property
     def xarray(self):
         return xa.merge([self.u.rename('u'), self.s.rename('s'), self.v.rename('v')])
+
+    @lazy_property
+    def ve(self):
+        ve = self.s**2
+        ve = ve / ve.sum()
+        return ve.rename('ve')
 
 def _perm(x):
     return x[np.random.permutation(x.shape[0]), :]
@@ -196,11 +202,15 @@ class merge:
     @lazy_property
     def _merge(self):
         crispr = depmap_crispr.data.copy()
+        crispr = crispr.merge(depmap_crispr.row_annot.set_index('rows'), join='inner')
+        crispr = crispr.merge(depmap_crispr.col_map_location.set_index('cols'), join='inner')
         crispr = crispr.sel(cols=np.isnan(crispr.mat).sum(axis=0)==0)
         crispr['mat'] = (('rows', 'cols'), crispr.mat.data.rechunk(-1, 1000))
         crispr = crispr.rename({'mat': 'data'})
 
         dm_expr = depmap_expr.data.copy()
+        dm_expr = dm_expr.merge(depmap_expr.row_annot.set_index('rows'), join='inner')
+        dm_expr = dm_expr.merge(depmap_expr.col_map_location.set_index('cols'), join='inner')
         dm_expr = dm_expr.sel(cols=np.isnan(dm_expr.mat).sum(axis=0)==0)
         dm_expr['mat'] = (('rows', 'cols'), dm_expr.mat.data.rechunk(-1, 1000))
         dm_expr['mean'] = dm_expr.mat.mean(axis=0)
@@ -208,6 +218,8 @@ class merge:
         dm_expr = dm_expr.rename({'mat': 'data'})
 
         dm_cnv = depmap_cnv.data.copy()
+        dm_cnv = dm_cnv.merge(depmap_cnv.row_annot.set_index('rows'), join='inner')
+        dm_cnv = dm_cnv.merge(depmap_cnv.col_map_location.set_index('cols'), join='inner')
         dm_cnv = dm_cnv.sel(cols=np.isnan(dm_cnv.mat).sum(axis=0)==0)
         dm_cnv['mat'] = (('rows', 'cols'), dm_cnv.mat.data.rechunk(-1, 1000))
         dm_cnv = dm_cnv.rename({'mat': 'data'})

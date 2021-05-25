@@ -9,6 +9,7 @@ from pathlib import Path
 import zarr
 import numcodecs as nc
 import dask.array as daa
+import ncbi.sql.ncbi as ncbi
 
 config.exec()
 
@@ -37,6 +38,20 @@ class CRISPR:
         cols['symbol'] = cols.cols.str.replace(' .*$', '', regex=True)
         cols['entrez'] = cols.cols.str.replace('^.*\(|\)$', '', regex=True).astype(int)
         return cols
+
+    @lazy_property
+    @cached_property(type=Dir.pickle)
+    def col_map_location(self):
+        cols = self.cols
+        map_location = ncbi.query(ncbi.sql['map_location'], 'homo_sapiens')
+        map_location = cols.set_index('entrez').\
+            join(map_location.set_index('entrez'), how='inner')
+        map_location = map_location.reset_index(drop=True)[['cols', 'map_location']].drop_duplicates()
+        return map_location
+
+    @property
+    def row_annot(self):
+        return self.release.samples.rename(columns={'DepMap_ID': 'rows'})
 
     @lazy_property
     def mat(self):
