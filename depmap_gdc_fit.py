@@ -194,20 +194,55 @@ class Mat:
             )
         )
 
+def _new_cols(ds):
+    x1_1 = ds.col_entrez[['col', 'dbprimary_acc', 'display_label']]
+    x1_1 = x1_1.drop_duplicates()
+    x1_1 = x1_1.rename(columns={
+        'col': 'cols',
+        'dbprimary_acc': 'entrez',
+        'display_label': 'symbol'
+    })
+    x1_1['new_cols'] = x1_1.symbol + ' (' + x1_1.entrez + ')'
+    x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
+    x1_1 = x1_1.query('n==1 | cols.str.find("ENSGR")<0').copy()
+    x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
+    x1_1 = x1_1.query('n==1').copy()
+    del x1_1['n']
+    x1_1 = x1_1.set_index('cols').to_xarray()
+    return x1_1
+
+def _new_rows(x5_1):
+    x5_1 = x5_1.to_dataframe().reset_index()
+    x5_1 = x5_1.rename(columns={'sample_id': 'new_rows'})
+    x5_2 = x5_1.drop(columns=['rows']).drop_duplicates()
+    x5_3 = x5_1[['rows', 'new_rows']].copy()
+    x5_3['w'] = x5_3.groupby('new_rows').new_rows.transform('size')
+    x5_3['w'] = 1/x5_3.w
+    x5_3['rows'] = pd.Series(range(x5_1.shape[0]), index=x5_1.rows)[x5_3.rows.to_numpy()].to_numpy()
+    x5_3['new_rows'] = pd.Series(range(x5_2.shape[0]), index=x5_2.new_rows)[x5_3.new_rows.to_numpy()].to_numpy()
+    x5_3 = daa.from_array(
+        sp.COO(x5_3[['new_rows', 'rows']].to_numpy().T, x5_3.w.astype('float32')),
+        chunks=(1000,-1)
+    )
+    return [x5_2, x5_3]
+
 class merge:
     @lazy_property
     def storage(self):
         return config.cache / 'merge'
 
     @lazy_property
-    def _merge(self):
+    def crispr1(self):
         crispr = depmap_crispr.data.copy()
         crispr = crispr.merge(depmap_crispr.row_annot.set_index('rows'), join='inner')
         crispr = crispr.merge(depmap_crispr.col_map_location.set_index('cols'), join='inner')
         crispr = crispr.sel(cols=np.isnan(crispr.mat).sum(axis=0)==0)
         crispr['mat'] = (('rows', 'cols'), crispr.mat.data.rechunk(-1, 1000))
         crispr = crispr.rename({'mat': 'data'})
+        return crispr
 
+    @lazy_property
+    def dm_expr1(self):
         dm_expr = depmap_expr.data.copy()
         dm_expr = dm_expr.merge(depmap_expr.row_annot.set_index('rows'), join='inner')
         dm_expr = dm_expr.merge(depmap_expr.col_map_location.set_index('cols'), join='inner')
@@ -216,48 +251,21 @@ class merge:
         dm_expr['mean'] = dm_expr.mat.mean(axis=0)
         dm_expr = dm_expr.sel(cols=dm_expr['mean']>1.5)
         dm_expr = dm_expr.rename({'mat': 'data'})
+        return dm_expr
 
+    @lazy_property
+    def dm_cnv1(self):
         dm_cnv = depmap_cnv.data.copy()
         dm_cnv = dm_cnv.merge(depmap_cnv.row_annot.set_index('rows'), join='inner')
         dm_cnv = dm_cnv.merge(depmap_cnv.col_map_location.set_index('cols'), join='inner')
         dm_cnv = dm_cnv.sel(cols=np.isnan(dm_cnv.mat).sum(axis=0)==0)
         dm_cnv['mat'] = (('rows', 'cols'), dm_cnv.mat.data.rechunk(-1, 1000))
         dm_cnv = dm_cnv.rename({'mat': 'data'})
+        return dm_cnv
 
-        def _new_cols(ds, filter_cols):
-            x1_1 = ds.col_entrez[['col', 'dbprimary_acc', 'display_label']]
-            x1_1 = x1_1.drop_duplicates()
-            x1_1 = x1_1.rename(columns={
-                'col': 'cols',
-                'dbprimary_acc': 'entrez',
-                'display_label': 'symbol'
-            })
-            x1_1['new_cols'] = x1_1.symbol + ' (' + x1_1.entrez + ')'
-            x1_1 = x1_1.query('new_cols.isin(@filter_cols)').copy()
-            x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
-            x1_1 = x1_1.query('n==1 | cols.str.find("ENSGR")<0').copy()
-            x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
-            x1_1 = x1_1.query('n==1').copy()
-            del x1_1['n']
-            x1_1 = x1_1.set_index('cols').to_xarray()
-            return x1_1
-
-        def _new_rows(x5_1):
-            x5_1 = x5_1.to_dataframe().reset_index()
-            x5_1 = x5_1.rename(columns={'sample_id': 'new_rows'})
-            x5_2 = x5_1.drop(columns=['rows']).drop_duplicates()
-            x5_3 = x5_1[['rows', 'new_rows']].copy()
-            x5_3['w'] = x5_3.groupby('new_rows').new_rows.transform('size')
-            x5_3['w'] = 1/x5_3.w
-            x5_3['rows'] = pd.Series(range(x5_1.shape[0]), index=x5_1.rows)[x5_3.rows.to_numpy()].to_numpy()
-            x5_3['new_rows'] = pd.Series(range(x5_2.shape[0]), index=x5_2.new_rows)[x5_3.new_rows.to_numpy()].to_numpy()
-            x5_3 = daa.from_array(
-                sp.COO(x5_3[['new_rows', 'rows']].to_numpy().T, x5_3.w.astype('float32')),
-                chunks=(1000,-1)
-            )
-            return [x5_2, x5_3]
-
-        new_cols = _new_cols(_gdc_expr, dm_expr.cols.values)
+    @lazy_property
+    def gdc_expr1(self):
+        new_cols = _new_cols(_gdc_expr)
         new_rows = _new_rows(_gdc_expr.xarray[['rows', 'project_id', 'is_normal', 'case_id', 'sample_id']])
         gdc_expr = _gdc_expr.xarray[['data', 'rows', 'cols']]
         gdc_expr = gdc_expr.sel(cols=new_cols.cols)
@@ -269,8 +277,11 @@ class merge:
         gdc_expr = gdc_expr.drop('rows').rename({'new_rows': 'rows'})
         gdc_expr['mean'] = gdc_expr.data.mean(axis=0).compute()
         gdc_expr = gdc_expr.sel(cols=gdc_expr['mean']>(-7))
+        return gdc_expr
 
-        new_cols = _new_cols(_gdc_cnv, dm_cnv.cols.values)
+    @lazy_property
+    def gdc_cnv1(self):
+        new_cols = _new_cols(_gdc_cnv)
         new_rows = _new_rows(_gdc_cnv.xarray[['rows', 'project_id','case_id', 'sample_id']])
         gdc_cnv = _gdc_cnv.xarray[['data', 'rows', 'cols']]
         gdc_cnv = gdc_cnv.sel(cols=new_cols.cols)
@@ -281,6 +292,19 @@ class merge:
         new_rows[1] = new_rows[1].rechunk((None, gdc_cnv.data.chunks[0]))
         gdc_cnv['data'] = (('new_rows', 'cols'),  new_rows[1] @ gdc_cnv.data.data.astype('float32'))
         gdc_cnv = gdc_cnv.drop('rows').rename({'new_rows': 'rows'})
+        return gdc_cnv
+
+    @lazy_property
+    def _merge(self):
+        crispr = self.crispr1
+        dm_expr = self.dm_expr1
+        dm_cnv = self.dm_cnv1
+
+        gdc_expr = self.gdc_expr1
+        gdc_expr = gdc_expr.sel(cols=gdc_expr.cols.isin(dm_expr.cols))
+
+        gdc_cnv = self.gdc_cnv1
+        gdc_cnv = gdc_cnv.sel(cols=gdc_cnv.cols.isin(dm_cnv.cols))
 
         depmap_rows = set(crispr.rows.values)
         depmap_rows.intersection_update(dm_expr.rows.values)
@@ -342,6 +366,12 @@ def concat(x):
     x = (y.assign_coords({'cols': str(i) + ':' + y.cols}) for i, y in enumerate(x))
     x = xa.concat(x, 'cols')
     x = xa.Dataset().assign(data=x)
+    return x
+
+def concat1(x):
+    x = [y.copy() for y in x]
+    x = [y.assign_coords({'cols': str(i) + ':' + y.cols.astype('str').to_series()}) for i, y in enumerate(x)]
+    x = xa.concat(x, 'cols')
     return x
 
 class model:
