@@ -54,7 +54,7 @@ class CNV:
         return self.release.samples.rename(columns={'DepMap_ID': 'rows'})
 
     @lazy_property
-    def mat(self):
+    def mat1(self):
         path = Path(self.storage.path) / 'mat.zarr'
         if not path.exists():
             mat = np.array(self._data.iloc[:, 1:]).astype('float16')
@@ -68,16 +68,25 @@ class CNV:
         return zarr.open(str(path), mode='r')
 
     @lazy_property
-    def data(self):
+    def mat2(self):
         rows = self.rows
         cols = self.cols
-        mat = self.mat
+        mat = self.mat1
 
         data = xa.Dataset()
         data['rows'] = ('rows', rows)
         data = data.merge(cols.set_index('cols').to_xarray())
-        data['mat'] = (('rows', 'cols'), daa.from_zarr(mat))
+        data['data'] = (('rows', 'cols'), daa.from_zarr(mat))
 
         return data
+
+    @lazy_property
+    def mat3(self):
+        mat = self.mat2.copy()
+        mat = mat.merge(self.row_annot.set_index('rows'), join='inner')
+        mat = mat.merge(self.col_map_location.set_index('cols'), join='inner')
+        mat = mat.sel(cols=np.isnan(mat.data).sum(axis=0)==0)
+        mat['data'] = (('rows', 'cols'), mat.data.data.rechunk(-1, 1000))
+        return mat
 
 cnv = CNV()

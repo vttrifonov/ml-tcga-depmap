@@ -227,41 +227,21 @@ def _new_rows(x5_1):
     return [x5_2, x5_3]
 
 class merge:
-    @lazy_property
+    @property
     def storage(self):
         return config.cache / 'merge'
 
-    @lazy_property
+    @property
     def crispr1(self):
-        crispr = depmap_crispr.data.copy()
-        crispr = crispr.merge(depmap_crispr.row_annot.set_index('rows'), join='inner')
-        crispr = crispr.merge(depmap_crispr.col_map_location.set_index('cols'), join='inner')
-        crispr = crispr.sel(cols=np.isnan(crispr.mat).sum(axis=0)==0)
-        crispr['mat'] = (('rows', 'cols'), crispr.mat.data.rechunk(-1, 1000))
-        crispr = crispr.rename({'mat': 'data'})
-        return crispr
+        return depmap_crispr.mat3
 
-    @lazy_property
+    @property
     def dm_expr1(self):
-        dm_expr = depmap_expr.data.copy()
-        dm_expr = dm_expr.merge(depmap_expr.row_annot.set_index('rows'), join='inner')
-        dm_expr = dm_expr.merge(depmap_expr.col_map_location.set_index('cols'), join='inner')
-        dm_expr = dm_expr.sel(cols=np.isnan(dm_expr.mat).sum(axis=0)==0)
-        dm_expr['mat'] = (('rows', 'cols'), dm_expr.mat.data.rechunk(-1, 1000))
-        dm_expr['mean'] = dm_expr.mat.mean(axis=0)
-        dm_expr = dm_expr.sel(cols=dm_expr['mean']>1.5)
-        dm_expr = dm_expr.rename({'mat': 'data'})
-        return dm_expr
+        return depmap_expr.mat3
 
-    @lazy_property
+    @property
     def dm_cnv1(self):
-        dm_cnv = depmap_cnv.data.copy()
-        dm_cnv = dm_cnv.merge(depmap_cnv.row_annot.set_index('rows'), join='inner')
-        dm_cnv = dm_cnv.merge(depmap_cnv.col_map_location.set_index('cols'), join='inner')
-        dm_cnv = dm_cnv.sel(cols=np.isnan(dm_cnv.mat).sum(axis=0)==0)
-        dm_cnv['mat'] = (('rows', 'cols'), dm_cnv.mat.data.rechunk(-1, 1000))
-        dm_cnv = dm_cnv.rename({'mat': 'data'})
-        return dm_cnv
+        return depmap_expr.mat3
 
     @lazy_property
     def gdc_expr1(self):
