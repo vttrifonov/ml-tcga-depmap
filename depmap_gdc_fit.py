@@ -226,6 +226,11 @@ def _new_rows(x5_1):
     )
     return [x5_2, x5_3]
 
+def order_set(s, x):
+    s = list(s)
+    s = pd.Series(range(len(x)), index=x)[s].sort_values().index
+    return list(s)
+
 class merge:
     @property
     def storage(self):
@@ -279,34 +284,20 @@ class merge:
         crispr = self.crispr1
         dm_expr = self.dm_expr1
         dm_cnv = self.dm_cnv1
-
         gdc_expr = self.gdc_expr1
-        gdc_expr = gdc_expr.sel(cols=gdc_expr.cols.isin(dm_expr.cols))
-
         gdc_cnv = self.gdc_cnv1
-        gdc_cnv = gdc_cnv.sel(cols=gdc_cnv.cols.isin(dm_cnv.cols))
 
-        depmap_rows = set(crispr.rows.values)
-        depmap_rows.intersection_update(dm_expr.rows.values)
-        depmap_rows.intersection_update(dm_cnv.rows.values)
-        depmap_rows = list(depmap_rows)
+        depmap_rows = set(crispr.rows.values) & set(dm_expr.rows.values) & set(dm_cnv.rows.values)
+        depmap_rows = order_set(depmap_rows, crispr.rows)
 
-        expr_cols = set(dm_expr.cols.values)
-        expr_cols.intersection_update(gdc_expr.cols.values)
-        expr_cols = list(expr_cols)
-        expr_cols = pd.Series(range(len(gdc_expr.cols)), index=gdc_expr.cols)[expr_cols].sort_values()
-        expr_cols = list(expr_cols.index)
+        expr_cols = set(dm_expr.cols.values) & set(gdc_expr.cols.values)
+        expr_cols = order_set(expr_cols, gdc_expr.cols)
 
-        cnv_cols = set(dm_cnv.cols.values)
-        cnv_cols.intersection_update(gdc_cnv.cols.values)
-        cnv_cols = list(cnv_cols)
-        cnv_cols = pd.Series(range(len(gdc_cnv.cols)), index=gdc_cnv.cols)[cnv_cols].sort_values()
-        cnv_cols = list(cnv_cols.index)
+        cnv_cols = set(dm_cnv.cols.values) & set(gdc_cnv.cols.values)
+        cnv_cols = order_set(cnv_cols, gdc_cnv.cols)
 
-        gdc_rows = set(gdc_expr.rows.values)
-        gdc_rows.intersection_update(gdc_cnv.rows.values)
-        gdc_rows = list(gdc_rows)
-        gdc_rows = pd.Series(range(len(gdc_expr.rows)), index=gdc_expr.rows)[gdc_rows].sort_values().index
+        gdc_rows = set(gdc_expr.rows.values) & set(gdc_cnv.rows.values)
+        gdc_rows = order_set(gdc_rows, gdc_expr.rows)
 
         data = dict(
             crispr=crispr.sel(rows=depmap_rows),
