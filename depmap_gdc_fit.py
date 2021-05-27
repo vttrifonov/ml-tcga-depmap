@@ -246,40 +246,17 @@ class merge:
 
     @property
     def dm_cnv1(self):
-        return depmap_expr.mat3
+        return depmap_cnv.mat3
 
-    @lazy_property
+    @property
     def gdc_expr1(self):
-        new_cols = _new_cols(_gdc_expr)
-        new_rows = _new_rows(_gdc_expr.xarray[['rows', 'project_id', 'is_normal', 'case_id', 'sample_id']])
-        gdc_expr = _gdc_expr.xarray[['data', 'rows', 'cols']]
-        gdc_expr = gdc_expr.sel(cols=new_cols.cols)
-        gdc_expr = gdc_expr.merge(new_cols)
-        gdc_expr = gdc_expr.swap_dims({'cols': 'new_cols'}).drop('cols').rename({'new_cols': 'cols'})
-        gdc_expr = gdc_expr.merge(new_rows[0].set_index('new_rows'))
-        new_rows[1] = new_rows[1].rechunk((None, gdc_expr.data.chunks[0]))
-        gdc_expr['data'] = (('new_rows', 'cols'),  new_rows[1] @ gdc_expr.data.data.astype('float32'))
-        gdc_expr = gdc_expr.drop('rows').rename({'new_rows': 'rows'})
-        gdc_expr['mean'] = gdc_expr.data.mean(axis=0).compute()
-        gdc_expr = gdc_expr.sel(cols=gdc_expr['mean']>(-7))
-        return gdc_expr
+        return _gdc_expr.mat3
 
-    @lazy_property
+    @property
     def gdc_cnv1(self):
-        new_cols = _new_cols(_gdc_cnv)
-        new_rows = _new_rows(_gdc_cnv.xarray[['rows', 'project_id','case_id', 'sample_id']])
-        gdc_cnv = _gdc_cnv.xarray[['data', 'rows', 'cols']]
-        gdc_cnv = gdc_cnv.sel(cols=new_cols.cols)
-        gdc_cnv = gdc_cnv.merge(new_cols)
-        gdc_cnv = gdc_cnv.sel(cols=np.isnan(gdc_cnv.data).sum(axis=0)==0)
-        gdc_cnv = gdc_cnv.swap_dims({'cols': 'new_cols'}).drop('cols').rename({'new_cols': 'cols'})
-        gdc_cnv = gdc_cnv.merge(new_rows[0].set_index('new_rows'))
-        new_rows[1] = new_rows[1].rechunk((None, gdc_cnv.data.chunks[0]))
-        gdc_cnv['data'] = (('new_rows', 'cols'),  new_rows[1] @ gdc_cnv.data.data.astype('float32'))
-        gdc_cnv = gdc_cnv.drop('rows').rename({'new_rows': 'rows'})
-        return gdc_cnv
+        return _gdc_cnv.mat3
 
-    @lazy_property
+    @property
     def _merge(self):
         crispr = self.crispr1
         dm_expr = self.dm_expr1

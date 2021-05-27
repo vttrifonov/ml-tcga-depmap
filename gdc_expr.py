@@ -11,6 +11,39 @@ from pathlib import Path
 import dask.array as daa
 import xarray as xa
 import ensembl.sql.ensembl as ensembl
+import sparse
+
+def _new_cols(ds):
+    x1_1 = ds.col_entrez[['col', 'dbprimary_acc', 'display_label']]
+    x1_1 = x1_1.drop_duplicates()
+    x1_1 = x1_1.rename(columns={
+        'col': 'cols',
+        'dbprimary_acc': 'entrez',
+        'display_label': 'symbol'
+    })
+    x1_1['new_cols'] = x1_1.symbol + ' (' + x1_1.entrez + ')'
+    x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
+    x1_1 = x1_1.query('n==1 | cols.str.find("ENSGR")<0').copy()
+    x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
+    x1_1 = x1_1.query('n==1').copy()
+    del x1_1['n']
+    x1_1 = x1_1.set_index('cols').to_xarray()
+    return x1_1
+
+def _new_rows(x5_1):
+    x5_1 = x5_1.to_dataframe().reset_index()
+    x5_1 = x5_1.rename(columns={'sample_id': 'new_rows'})
+    x5_2 = x5_1.drop(columns=['rows']).drop_duplicates()
+    x5_3 = x5_1[['rows', 'new_rows']].copy()
+    x5_3['w'] = x5_3.groupby('new_rows').new_rows.transform('size')
+    x5_3['w'] = 1/x5_3.w
+    x5_3['rows'] = pd.Series(range(x5_1.shape[0]), index=x5_1.rows)[x5_3.rows.to_numpy()].to_numpy()
+    x5_3['new_rows'] = pd.Series(range(x5_2.shape[0]), index=x5_2.new_rows)[x5_3.new_rows.to_numpy()].to_numpy()
+    x5_3 = daa.from_array(
+        sparse.COO(x5_3[['new_rows', 'rows']].to_numpy().T, x5_3.w.astype('float32')),
+        chunks=(1000,-1)
+    )
+    return [x5_2, x5_3]
 
 class Expr:
     @lazy_property
@@ -105,7 +138,7 @@ class Expr:
         return col_entrez
 
     @lazy_property
-    def zarr(self):
+    def mat1(self):
         cols = self.cols
         cols = pd.Series(range(cols.shape[0]), index=cols)
 
@@ -137,12 +170,29 @@ class Expr:
         return zarr.open(str(path), mode='r')
 
     @lazy_property
-    def xarray(self):
+    def mat2(self):
         result = xa.Dataset()
-        result['data'] = (['rows', 'cols'], daa.from_zarr(self.zarr))
+        result['data'] = (['rows', 'cols'], daa.from_zarr(self.mat1))
         result = result.merge(self.rows.rename_axis('rows'))
         result['cols'] = np.array(self.cols)
         return result
+
+    @lazy_property
+    def mat3(self):
+        new_cols = _new_cols(self)
+        new_rows = _new_rows(self.mat2[['rows', 'project_id', 'is_normal', 'case_id', 'sample_id']])
+        mat = self.mat2[['data', 'rows', 'cols']]
+        mat = mat.sel(cols=new_cols.cols)
+        mat = mat.merge(new_cols)
+        mat = mat.swap_dims({'cols': 'new_cols'}).drop('cols').rename({'new_cols': 'cols'})
+        mat = mat.merge(new_rows[0].set_index('new_rows'))
+        new_rows[1] = new_rows[1].rechunk((None, mat.data.chunks[0]))
+        mat['data'] = (('new_rows', 'cols'),  new_rows[1] @ mat.data.data.astype('float32'))
+        mat = mat.drop('rows').rename({'new_rows': 'rows'})
+        mat['mean'] = mat.data.mean(axis=0).compute()
+        mat = mat.sel(cols=mat['mean']>(-7))
+        return mat
+
 
 expr = Expr()
 
