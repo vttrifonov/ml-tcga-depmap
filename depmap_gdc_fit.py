@@ -8,7 +8,6 @@ from depmap_expr import expr as depmap_expr
 from depmap_cnv import cnv as depmap_cnv
 from gdc_expr import expr as _gdc_expr
 from gdc_cnv import cnv as _gdc_cnv
-import sparse as sp
 from common.defs import lazy_property
 from helpers import config
 import pickle
@@ -193,38 +192,6 @@ class Mat:
                 lambda: SVD.from_mat(mat().data)
             )
         )
-
-def _new_cols(ds):
-    x1_1 = ds.col_entrez[['col', 'dbprimary_acc', 'display_label']]
-    x1_1 = x1_1.drop_duplicates()
-    x1_1 = x1_1.rename(columns={
-        'col': 'cols',
-        'dbprimary_acc': 'entrez',
-        'display_label': 'symbol'
-    })
-    x1_1['new_cols'] = x1_1.symbol + ' (' + x1_1.entrez + ')'
-    x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
-    x1_1 = x1_1.query('n==1 | cols.str.find("ENSGR")<0').copy()
-    x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
-    x1_1 = x1_1.query('n==1').copy()
-    del x1_1['n']
-    x1_1 = x1_1.set_index('cols').to_xarray()
-    return x1_1
-
-def _new_rows(x5_1):
-    x5_1 = x5_1.to_dataframe().reset_index()
-    x5_1 = x5_1.rename(columns={'sample_id': 'new_rows'})
-    x5_2 = x5_1.drop(columns=['rows']).drop_duplicates()
-    x5_3 = x5_1[['rows', 'new_rows']].copy()
-    x5_3['w'] = x5_3.groupby('new_rows').new_rows.transform('size')
-    x5_3['w'] = 1/x5_3.w
-    x5_3['rows'] = pd.Series(range(x5_1.shape[0]), index=x5_1.rows)[x5_3.rows.to_numpy()].to_numpy()
-    x5_3['new_rows'] = pd.Series(range(x5_2.shape[0]), index=x5_2.new_rows)[x5_3.new_rows.to_numpy()].to_numpy()
-    x5_3 = daa.from_array(
-        sp.COO(x5_3[['new_rows', 'rows']].to_numpy().T, x5_3.w.astype('float32')),
-        chunks=(1000,-1)
-    )
-    return [x5_2, x5_3]
 
 def order_set(s, x):
     s = list(s)

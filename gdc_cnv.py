@@ -14,38 +14,6 @@ import ensembl.sql.ensembl as ensembl
 import json
 import sparse
 
-def _new_cols(ds):
-    x1_1 = ds.col_entrez[['col', 'dbprimary_acc', 'display_label']]
-    x1_1 = x1_1.drop_duplicates()
-    x1_1 = x1_1.rename(columns={
-        'col': 'cols',
-        'dbprimary_acc': 'entrez',
-        'display_label': 'symbol'
-    })
-    x1_1['new_cols'] = x1_1.symbol + ' (' + x1_1.entrez + ')'
-    x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
-    x1_1 = x1_1.query('n==1 | cols.str.find("ENSGR")<0').copy()
-    x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
-    x1_1 = x1_1.query('n==1').copy()
-    del x1_1['n']
-    x1_1 = x1_1.set_index('cols').to_xarray()
-    return x1_1
-
-def _new_rows(x5_1):
-    x5_1 = x5_1.to_dataframe().reset_index()
-    x5_1 = x5_1.rename(columns={'sample_id': 'new_rows'})
-    x5_2 = x5_1.drop(columns=['rows']).drop_duplicates()
-    x5_3 = x5_1[['rows', 'new_rows']].copy()
-    x5_3['w'] = x5_3.groupby('new_rows').new_rows.transform('size')
-    x5_3['w'] = 1/x5_3.w
-    x5_3['rows'] = pd.Series(range(x5_1.shape[0]), index=x5_1.rows)[x5_3.rows.to_numpy()].to_numpy()
-    x5_3['new_rows'] = pd.Series(range(x5_2.shape[0]), index=x5_2.new_rows)[x5_3.new_rows.to_numpy()].to_numpy()
-    x5_3 = daa.from_array(
-        sparse.COO(x5_3[['new_rows', 'rows']].to_numpy().T, x5_3.w.astype('float32')),
-        chunks=(1000,-1)
-    )
-    return [x5_2, x5_3]
-
 class CNV:
     @lazy_property
     def storage(self):
@@ -178,9 +146,44 @@ class CNV:
         return result
 
     @lazy_property
+    def mat3_cols(self):
+        x1_1 = self.col_entrez[['col', 'dbprimary_acc', 'display_label']]
+        x1_1 = x1_1.drop_duplicates()
+        x1_1 = x1_1.rename(columns={
+            'col': 'cols',
+            'dbprimary_acc': 'entrez',
+            'display_label': 'symbol'
+        })
+        x1_1['new_cols'] = x1_1.symbol + ' (' + x1_1.entrez + ')'
+        x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
+        x1_1 = x1_1.query('n==1 | cols.str.find("ENSGR")<0').copy()
+        x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
+        x1_1 = x1_1.query('n==1').copy()
+        del x1_1['n']
+        x1_1 = x1_1.set_index('cols').to_xarray()
+        return x1_1
+
+    @lazy_property
+    def mat3_rows(self):
+        x5_1 = self.mat2[['rows', 'project_id','case_id', 'sample_id']]
+        x5_1 = x5_1.to_dataframe().reset_index()
+        x5_1 = x5_1.rename(columns={'sample_id': 'new_rows'})
+        x5_2 = x5_1.drop(columns=['rows']).drop_duplicates()
+        x5_3 = x5_1[['rows', 'new_rows']].copy()
+        x5_3['w'] = x5_3.groupby('new_rows').new_rows.transform('size')
+        x5_3['w'] = 1 / x5_3.w
+        x5_3['rows'] = pd.Series(range(x5_1.shape[0]), index=x5_1.rows)[x5_3.rows.to_numpy()].to_numpy()
+        x5_3['new_rows'] = pd.Series(range(x5_2.shape[0]), index=x5_2.new_rows)[x5_3.new_rows.to_numpy()].to_numpy()
+        x5_3 = daa.from_array(
+            sparse.COO(x5_3[['new_rows', 'rows']].to_numpy().T, x5_3.w.astype('float32')),
+            chunks=(1000, -1)
+        )
+        return [x5_2, x5_3]
+
+    @lazy_property
     def mat3(self):
-        new_cols = _new_cols(self)
-        new_rows = _new_rows(self.mat2[['rows', 'project_id','case_id', 'sample_id']])
+        new_cols = self.mat3_cols
+        new_rows = self.mat3_rows
         mat = self.mat2[['data', 'rows', 'cols']]
         mat = mat.sel(cols=new_cols.cols)
         mat = mat.merge(new_cols)
