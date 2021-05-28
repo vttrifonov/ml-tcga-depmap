@@ -151,21 +151,23 @@ d = m.cnv.data.assign_coords(arm=m.cnv.arm)
 d = d.groupby('arm')
 d = d.map(lambda x: (
     print(x.arm[0].values),
-    xa.DataArray(
-        daa.apply_gufunc(smooth, '(i),()->(i)', x, 40, vectorize=True),
-        dims=x.dims,
-        coords=x.coords
+    xa.apply_ufunc(
+        smooth, x, int(0.1*x.shape[1]),
+        input_core_dims = [['cols'], []], output_core_dims=[['cols']],
+        dask='parallelized', vectorize=True
     )
 )[1])
 d = d.persist()
 m.cnv['smooth'] = d.drop('arm')
 m.cnv['smooth_resid'] = (m.cnv.data - m.cnv.smooth).persist()
 
+
+
 px.scatter(
     (m.cnv.smooth_resid**2).mean(axis=0).rename('mean').\
         assign_coords(arm=m.cnv.arm, cyto=m.cnv.cyto).\
         to_dataframe().reset_index().reset_index().\
-        query('mean>0.1')
+        query('mean>=0')
     ,
     x='index', y='mean', color='arm',
     hover_data=['cyto', 'cols']
@@ -175,10 +177,9 @@ px.scatter(
     (m.cnv.smooth[0,:]).\
         assign_coords(data=m.cnv.data[0,:], arm=m.cnv.arm, cyto=m.cnv.cyto).\
         to_dataframe().reset_index().reset_index(),
-    x='index', y=['smooth', 'data'], color='cyto',
+    x='index', y=['smooth', 'data'], color='arm',
     hover_data=['cyto', 'cols']
 ).show()
-
 
 xa.merge([
     m.cnv.data.where(m.cnv.symbol.isin(['BRCA1', 'BRCA2', 'PARP1', 'PARP2']), drop=True).rename('expr'),
