@@ -13,6 +13,22 @@ import ncbi.sql.ncbi as ncbi
 
 config.exec()
 
+def _add_locs(x):
+    x = x.rename({'map_location': 'cyto'})
+    map = x.cyto.to_dataframe()
+    map['chr'] = map.cyto.str.replace('[pq].*$', '', regex=True)
+    map['pq'] = map.cyto.str.replace('^.*([pq]).*$', r'\1', regex=True)
+    map['loc'] = map.cyto.str.replace('^.*[pq]', '', regex=True)
+    map['loc'] = pd.to_numeric(map['loc'], errors='coerce')
+    map['loc'] = (2 * (map.pq == 'q') - 1) * map['loc']
+    map['arm'] = map.chr + map.pq
+    map = map.sort_values(['chr', 'loc'])
+    x = x.merge(map[['chr', 'loc', 'arm']])
+    x = x.sel(cols=map.index)
+    x = x.sel(cols=~x['loc'].isnull())
+    x.data.values = x.data.data.rechunk('auto').persist()
+    return x
+
 class CNV:
     @property
     def release(self):
@@ -86,7 +102,11 @@ class CNV:
         mat = mat.merge(self.row_annot.set_index('rows'), join='inner')
         mat = mat.merge(self.col_map_location.set_index('cols'), join='inner')
         mat = mat.sel(cols=np.isnan(mat.data).sum(axis=0)==0)
-        mat['data'] = (('rows', 'cols'), mat.data.data.rechunk(-1, 1000))
+        data = mat.data.data
+        data = data.rechunk(-1, 1000).astype('float32')
+        data = daa.log2(data+0.1)
+        mat['data'] = (('rows', 'cols'), data)
+        mat = _add_locs(mat)
         return mat
 
 cnv = CNV()

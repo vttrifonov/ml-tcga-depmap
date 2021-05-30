@@ -14,6 +14,24 @@ import ensembl.sql.ensembl as ensembl
 import json
 import sparse
 
+config.exec()
+
+def _add_locs(x):
+    x = x.rename({'map_location': 'cyto'})
+    map = x.cyto.to_dataframe()
+    map['chr'] = map.cyto.str.replace('[pq].*$', '', regex=True)
+    map['pq'] = map.cyto.str.replace('^.*([pq]).*$', r'\1', regex=True)
+    map['loc'] = map.cyto.str.replace('^.*[pq]', '', regex=True)
+    map['loc'] = pd.to_numeric(map['loc'], errors='coerce')
+    map['loc'] = (2 * (map.pq == 'q') - 1) * map['loc']
+    map['arm'] = map.chr + map.pq
+    map = map.sort_values(['chr', 'loc'])
+    x = x.merge(map[['chr', 'loc', 'arm']])
+    x = x.sel(cols=map.index)
+    x = x.sel(cols=~x['loc'].isnull())
+    x.data.values = x.data.data.rechunk('auto').persist()
+    return x
+
 class CNV:
     @lazy_property
     def storage(self):
@@ -191,8 +209,11 @@ class CNV:
         mat = mat.swap_dims({'cols': 'new_cols'}).drop('cols').rename({'new_cols': 'cols'})
         mat = mat.merge(new_rows[0].set_index('new_rows'))
         new_rows[1] = new_rows[1].rechunk((None, mat.data.chunks[0]))
-        mat['data'] = (('new_rows', 'cols'),  new_rows[1] @ mat.data.data.astype('float32'))
+        data = new_rows[1] @ mat.data.data.astype('float32')
+        data = daa.log2(data+0.1)
+        mat['data'] = (('new_rows', 'cols'),  data)
         mat = mat.drop('rows').rename({'new_rows': 'rows'})
+        mat = _add_locs(mat)
         return mat
 
 
