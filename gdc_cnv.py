@@ -32,6 +32,55 @@ def _add_locs(x):
     x.data.values = x.data.data.rechunk('auto').persist()
     return x
 
+def _loc_dummy(x):
+    import sparse
+    import re
+
+    loc = x.to_series()
+    loc = loc.str.replace(' and ', '|')
+    loc1 = [np.array(x.split('|')) for x in loc]
+    loc2 = [np.repeat(loc.index[i], len(x)) for i, x in enumerate(loc1)]
+    loc = pd.Series(
+        np.hstack(loc1),
+        index=pd.Index(np.hstack(loc2), name=loc.index.name),
+        name=loc.name
+    )
+    loc = loc.reset_index().drop_duplicates().set_index(loc.index.name).squeeze()
+
+    def _split(s):
+        s = s.split('-')
+        if len(s) == 1:
+            return s
+        chr = re.sub('[pq].*$', '', s[0])
+        s[1] = chr + s[1]
+        return s
+
+    loc1 = [np.array(_split(x)) for x in loc]
+    loc2 = [np.repeat(loc.index[i], len(x)) for i, x in enumerate(loc1)]
+    loc = pd.Series(
+        np.hstack(loc1),
+        index=pd.Index(np.hstack(loc2), name=loc.index.name),
+        name=loc.name
+    )
+    loc = loc.reset_index().drop_duplicates().set_index(loc.index.name).squeeze()
+
+    rows = pd.Series(range(len(x.cols)), index=x.cols)
+    cols = loc.drop_duplicates()
+    cols = pd.Series(range(len(cols)), index=cols)
+    data = sparse.COO([rows[loc.index], cols[loc]], 1, shape=(len(rows), len(cols)))
+    data = data.todense()
+    data = daa.from_array(data)
+    loc = xa.DataArray(
+        data,
+        dims=('cols', x.name + '_cols'),
+        coords={
+            'cols': rows.index.to_numpy(),
+            x.name + '_cols': cols.index.to_numpy()
+        },
+        name=x.name
+    )
+    return loc
+
 class CNV:
     @lazy_property
     def storage(self):
@@ -214,6 +263,7 @@ class CNV:
         mat['data'] = (('new_rows', 'cols'),  data)
         mat = mat.drop('rows').rename({'new_rows': 'rows'})
         mat = _add_locs(mat)
+        mat['cyto_dummy'] = _loc_dummy(mat.cyto)
         return mat
 
 
