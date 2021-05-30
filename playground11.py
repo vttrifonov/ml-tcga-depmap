@@ -56,36 +56,15 @@ def _data():
     crispr = m.crispr1.copy()
     cnv = m.dm_cnv1.copy()
     expr = m.dm_expr1.copy()
-
     rows = set(crispr.rows.values) & set(cnv.rows.values) & set(expr.rows.values)
     rows = list(rows)
     crispr = crispr.sel(rows=crispr.rows.isin(rows))
     cnv = cnv.sel(rows=cnv.rows.isin(rows))
     expr = expr.sel(rows=expr.rows.isin(rows))
 
-    cnv['data'] = daa.log2(cnv.data.astype('float32')+0.1)
     crispr['data'] = dmlp.StandardScaler().fit_transform(crispr.data.astype('float32'))
     cnv['data'] = dmlp.StandardScaler().fit_transform(cnv.data.astype('float32'))
     expr['data'] = dmlp.StandardScaler().fit_transform(expr.data.astype('float32'))
-
-    def _add_locs(x):
-        x = x.rename({'map_location': 'cyto'})
-        map = x.cyto.to_dataframe()
-        map['chr'] = map.cyto.str.replace('[pq].*$', '', regex=True)
-        map['pq'] = map.cyto.str.replace('^.*([pq]).*$', r'\1', regex=True)
-        map['loc'] = map.cyto.str.replace('^.*[pq]', '', regex=True)
-        map['loc'] = pd.to_numeric(map['loc'], errors='coerce')
-        map['loc'] = (2*(map.pq=='q')-1)*map['loc']
-        map['arm'] = map.chr + map.pq
-        map = map.sort_values(['chr', 'loc'])
-        x = x.merge(map[['chr', 'loc', 'arm']])
-        x = x.sel(cols=map.index)
-        x = x.sel(cols=~x['loc'].isnull())
-        x.data.values = x.data.data.rechunk('auto').persist()
-        return x
-
-    cnv = _add_locs(cnv)
-    expr = _add_locs(expr)
 
     def _loc_dummy(x):
         import sparse
@@ -119,8 +98,6 @@ def _data():
         )
         loc = loc.reset_index().drop_duplicates().set_index(loc.index.name).squeeze()
 
-
-
         rows = pd.Series(range(len(x.cols)), index=x.cols)
         cols = loc.drop_duplicates()
         cols = pd.Series(range(len(cols)), index=cols)
@@ -141,7 +118,7 @@ def _data():
     #cnv['arm_dummy'] = _loc_dummy(cnv.arm)
     cnv['cyto_dummy'] = _loc_dummy(cnv.cyto)
     #expr['arm_dummy'] = _loc_dummy(expr.arm)
-    expr['cyto_dummy'] = _loc_dummy(expr.cyto)
+    #expr['cyto_dummy'] = _loc_dummy(expr.cyto)
 
     return SimpleNamespace(
         crispr = crispr,
@@ -247,10 +224,10 @@ px.scatter(
 ).show()
 
 px.scatter(
-    (m.cnv.rfft[0,:]).\
+    (m.cnv.smooth[0,:]).\
         assign_coords(data=m.cnv.data[0,:], arm=m.cnv.arm, cyto=m.cnv.cyto).\
         to_dataframe().reset_index().reset_index(),
-    x='index', y=['rfft', 'data'], color='arm',
+    x='index', y=['smooth', 'data'], color='arm',
     hover_data=['cyto', 'cols']
 ).show()
 
