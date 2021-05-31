@@ -22,11 +22,11 @@ def _add_locs(x):
     map['loc'] = pd.to_numeric(map['loc'], errors='coerce')
     map['loc'] = (2 * (map.pq == 'q') - 1) * map['loc']
     map['arm'] = map.chr + map.pq
-    map = map.sort_values(['chr', 'loc'])
+    #map = map.sort_values(['chr', 'loc'])
     x = x.merge(map[['chr', 'loc', 'arm']])
-    x = x.sel(cols=map.index)
-    x = x.sel(cols=~x['loc'].isnull())
-    x.data.values = x.data.data.rechunk('auto').persist()
+    #x = x.sel(cols=map.index)
+    #x = x.sel(cols=~x['loc'].isnull())
+    #x.data.values = x.data.data.rechunk('auto').persist()
     return x
 
 def _loc_dummy(x):
@@ -66,7 +66,7 @@ def _loc_dummy(x):
     cols = pd.Series(range(len(cols)), index=cols)
     data = sparse.COO([rows[loc.index], cols[loc]], 1, shape=(len(rows), len(cols)))
     data = data.todense()
-    data = daa.from_array(data)
+    data = daa.from_array(data, chunks=(-1, -1))
     loc = xa.DataArray(
         data,
         dims=('cols', x.name + '_cols'),
