@@ -16,3 +16,6 @@
 [submodule "depmap"]
 	path = depmap
 	url = ssh://git@github.com/vttrifonov/depmap.git
+[submodule "ucsc-genome-browser"]
+	path = ucsc-genome-browser
+	url = ssh://git@github.com/vttrifonov/ucsc-genome-browser
