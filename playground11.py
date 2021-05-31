@@ -55,10 +55,10 @@ def _rfft(x, n):
     return rfft
 
 m = gdf.merge()._merge
+
 d = m.dm_cnv
-d = d.sel(cols=~d['loc'].isnull())
-d = d.sel(cols=~d.arm.isin(['--', 'X;YX;Y']))
-d = d.sortby(['chr', 'loc'])
+d['txMid'] = (d.txStart+d.txEnd)/2
+d = d.sortby(['chrom', 'txMid'])
 m.dm_cnv = d
 
 def _cnv_fft():
@@ -160,13 +160,13 @@ px.scatter(
 ).show()
 
 px.scatter(
-    m.dm_cnv.smooth[0,:].\
+    m.dm_cnv.rfft.loc['ACH-000152',:].\
         assign_coords(
-            data=m.dm_cnv.data[0,:],
+            data=m.dm_cnv.data.loc['ACH-000152',:],
             arm=m.dm_cnv.arm, cyto=m.dm_cnv.cyto
         ).\
         to_dataframe().reset_index().reset_index(),
-    x='index', y=['smooth', 'data'], color='arm',
+    x='index', y=['rfft', 'data'], color='arm',
     hover_data=['cyto', 'cols']
 ).show()
 
@@ -190,12 +190,12 @@ x5 = x4.min(axis=1).reshape(-1,1)
 x6 = (x2<x5).persist()
 plt.plot(x6.sum(axis=1), '.')
 
-pd.DataFrame(dict(n=x6.sum(axis=1).compute())).query('n>10')
+pd.DataFrame(dict(n=x6.sum(axis=1).compute())).query('n>0')
 
 pd.DataFrame(dict(
     cols=m.crispr.cols.values,
     n=x6.sum(axis=0).compute()
-)).query('n>1').sort_values('n').shape
+)).query('n>0').sort_values('n').shape
 
 
 plt.plot(
