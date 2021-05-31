@@ -54,28 +54,6 @@ def _rfft(x, n):
     rfft = rfft[:, :x.shape[1]]
     return rfft
 
-def _data():
-    m = gdf.merge()
-
-    crispr = m.crispr1.copy()
-    cnv = m.dm_cnv1.copy()
-    expr = m.dm_expr1.copy()
-    rows = set(crispr.rows.values) & set(cnv.rows.values) & set(expr.rows.values)
-    rows = list(rows)
-    crispr = crispr.sel(rows=crispr.rows.isin(rows))
-    cnv = cnv.sel(rows=cnv.rows.isin(rows))
-    expr = expr.sel(rows=expr.rows.isin(rows))
-
-    crispr['data'] = dmlp.StandardScaler().fit_transform(crispr.data.astype('float32'))
-    cnv['data'] = dmlp.StandardScaler().fit_transform(cnv.data.astype('float32'))
-    expr['data'] = dmlp.StandardScaler().fit_transform(expr.data.astype('float32'))
-
-    return SimpleNamespace(
-        crispr = m.crispr,
-        cnv = cnv,
-        expr = expr
-    )
-
 m = gdf.merge()._merge
 d = m.dm_cnv
 d = d.sel(cols=~d['loc'].isnull())
@@ -172,7 +150,7 @@ m.dm_cnv['smooth'] = d
 m.dm_cnv['smooth_resid'] = (m.dm_cnv.data - m.dm_cnv.smooth).persist()
 
 px.scatter(
-    (m.dm_cnv.smooth_resid**2).mean(axis=0).rename('mean').\
+    (m.dm_cnv.fft_resid**2).mean(axis=0).rename('mean').\
         assign_coords(arm=m.dm_cnv.arm, cyto=m.dm_cnv.cyto).\
         to_dataframe().reset_index().reset_index().\
         query('mean>=0')
@@ -182,13 +160,13 @@ px.scatter(
 ).show()
 
 px.scatter(
-    m.dm_cnv.rfft[0,:].\
+    m.dm_cnv.smooth[0,:].\
         assign_coords(
             data=m.dm_cnv.data[0,:],
             arm=m.dm_cnv.arm, cyto=m.dm_cnv.cyto
         ).\
         to_dataframe().reset_index().reset_index(),
-    x='index', y=['rfft', 'data'], color='arm',
+    x='index', y=['smooth', 'data'], color='arm',
     hover_data=['cyto', 'cols']
 ).show()
 
@@ -210,7 +188,7 @@ x4 = daa.from_zarr('tmp/crispr/rand')
 
 x5 = x4.min(axis=1).reshape(-1,1)
 x6 = (x2<x5).persist()
-plt.plot(x6.sum(axis=0), '.')
+plt.plot(x6.sum(axis=1), '.')
 
 pd.DataFrame(dict(n=x6.sum(axis=1).compute())).query('n>10')
 
@@ -219,8 +197,6 @@ pd.DataFrame(dict(
     n=x6.sum(axis=0).compute()
 )).query('n>1').sort_values('n').shape
 
-#816
-m.cnv.cyto.sel(cols=m.cnv.fft_group==816)
 
 plt.plot(
     sorted(x2[0,:].compute()),
