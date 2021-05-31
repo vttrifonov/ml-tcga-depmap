@@ -154,7 +154,8 @@ class Expr:
             'dbprimary_acc': 'entrez',
             'display_label': 'symbol'
         })
-        x1_1['new_cols'] = x1_1.symbol + ' (' + x1_1.entrez + ')'
+        x1_1['entrez'] = x1_1.entrez.astype(int)
+        x1_1['new_cols'] = x1_1.symbol + ' (' + x1_1.entrez.astype(str) + ')'
         x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
         x1_1 = x1_1.query('n==1 | cols.str.find("ENSGR")<0').copy()
         x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')

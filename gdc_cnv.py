@@ -13,6 +13,7 @@ import xarray as xa
 import ensembl.sql.ensembl as ensembl
 import json
 import sparse
+import ncbi.sql.ncbi as ncbi
 
 config.exec()
 
@@ -25,11 +26,11 @@ def _add_locs(x):
     map['loc'] = pd.to_numeric(map['loc'], errors='coerce')
     map['loc'] = (2 * (map.pq == 'q') - 1) * map['loc']
     map['arm'] = map.chr + map.pq
-    map = map.sort_values(['chr', 'loc'])
+    #map = map.sort_values(['chr', 'loc'])
     x = x.merge(map[['chr', 'loc', 'arm']])
-    x = x.sel(cols=map.index)
-    x = x.sel(cols=~x['loc'].isnull())
-    x.data.values = x.data.data.rechunk('auto').persist()
+    #x = x.sel(cols=map.index)
+    #x = x.sel(cols=~x['loc'].isnull())
+    #x.data.values = x.data.data.rechunk('auto').persist()
     return x
 
 def _loc_dummy(x):
@@ -69,7 +70,7 @@ def _loc_dummy(x):
     cols = pd.Series(range(len(cols)), index=cols)
     data = sparse.COO([rows[loc.index], cols[loc]], 1, shape=(len(rows), len(cols)))
     data = data.todense()
-    data = daa.from_array(data)
+    data = daa.from_array(data, chunks=(-1, -1))
     loc = xa.DataArray(
         data,
         dims=('cols', x.name + '_cols'),
@@ -221,7 +222,8 @@ class CNV:
             'dbprimary_acc': 'entrez',
             'display_label': 'symbol'
         })
-        x1_1['new_cols'] = x1_1.symbol + ' (' + x1_1.entrez + ')'
+        x1_1['entrez'] = x1_1.entrez.astype(int)
+        x1_1['new_cols'] = x1_1.symbol + ' (' + x1_1.entrez.astype(str) + ')'
         x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
         x1_1 = x1_1.query('n==1 | cols.str.find("ENSGR")<0').copy()
         x1_1['n'] = x1_1.groupby('new_cols').new_cols.transform('size')
@@ -248,6 +250,17 @@ class CNV:
         return [x5_2, x5_3]
 
     @lazy_property
+    @cached_property(type=Dir.pickle)
+    def mat3_col_map_location(self):
+        cols = self.mat3_cols[['new_cols', 'entrez']].to_dataframe()
+        map_location = ncbi.query(ncbi.sql['map_location'], 'homo_sapiens')
+        map_location = cols.set_index('entrez').\
+            join(map_location.set_index('entrez'), how='inner')
+        map_location = map_location.rename(columns={'new_cols': 'cols'})
+        map_location = map_location.reset_index(drop=True)[['cols', 'map_location']].drop_duplicates()
+        return map_location
+
+    @lazy_property
     def mat3(self):
         new_cols = self.mat3_cols
         new_rows = self.mat3_rows
@@ -262,6 +275,7 @@ class CNV:
         data = daa.log2(data+0.1)
         mat['data'] = (('new_rows', 'cols'),  data)
         mat = mat.drop('rows').rename({'new_rows': 'rows'})
+        mat = mat.merge(self.mat3_col_map_location.set_index('cols'), join='inner')
         mat = _add_locs(mat)
         mat['cyto_dummy'] = _loc_dummy(mat.cyto)
         return mat
