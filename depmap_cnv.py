@@ -10,24 +10,9 @@ import zarr
 import numcodecs as nc
 import dask.array as daa
 import ncbi.sql.ncbi as ncbi
+import ucsc_gb.sql as ucsc
 
 config.exec()
-
-def _add_locs(x):
-    x = x.rename({'map_location': 'cyto'})
-    map = x.cyto.to_dataframe()
-    map['chr'] = map.cyto.str.replace('[pq].*$', '', regex=True)
-    map['pq'] = map.cyto.str.replace('^.*([pq]).*$', r'\1', regex=True)
-    map['loc'] = map.cyto.str.replace('^.*[pq]', '', regex=True)
-    map['loc'] = pd.to_numeric(map['loc'], errors='coerce')
-    map['loc'] = (2 * (map.pq == 'q') - 1) * map['loc']
-    map['arm'] = map.chr + map.pq
-    #map = map.sort_values(['chr', 'loc'])
-    x = x.merge(map[['chr', 'loc', 'arm']])
-    #x = x.sel(cols=map.index)
-    #x = x.sel(cols=~x['loc'].isnull())
-    #x.data.values = x.data.data.rechunk('auto').persist()
-    return x
 
 def _loc_dummy(x):
     import sparse
@@ -114,6 +99,27 @@ class CNV:
         map_location = map_location.reset_index(drop=True)[['cols', 'map_location']].drop_duplicates()
         return map_location
 
+    @lazy_property
+    @cached_property(type=Dir.pickle)
+    def col_tx(self):
+        cols = self.cols
+        tx = ucsc.query(ucsc.sql['refseq_tx'], 'hg38')
+        tx = tx[['name2', 'chrom', 'strand', 'txStart', 'txEnd']]
+        tx = tx.groupby(['name2', 'chrom', 'strand']).agg(
+            txStart_min=('txStart', 'min'),
+            txStart_max=('txStart', 'max'),
+            txEnd_min=('txEnd', 'min'),
+            txEnd_max=('txEnd', 'max')
+        )
+        tx = tx.reset_index()
+        tx['txStart'] = np.where(tx.strand=='+', tx.txStart_min, tx.txStart_max)
+        tx['txEnd'] = np.where(tx.strand == '+', tx.txEnd_max, tx.txEnd_min)
+        tx = tx.groupby('name2').filter(lambda x: x.shape[0]==1)
+        tx = cols.set_index('symbol').\
+            join(tx.set_index('name2'), how='inner')
+        tx = tx.reset_index(drop=True)[['cols', 'chrom', 'strand', 'txStart', 'txEnd']].drop_duplicates()
+        return tx
+
     @property
     def row_annot(self):
         return self.release.samples.rename(columns={'DepMap_ID': 'rows'})
@@ -150,12 +156,16 @@ class CNV:
         mat = self.mat2.copy()
         mat = mat.merge(self.row_annot.set_index('rows'), join='inner')
         mat = mat.merge(self.col_map_location.set_index('cols'), join='inner')
+        mat = mat.merge(self.col_tx.set_index('cols'), join='inner')
         mat = mat.sel(cols=np.isnan(mat.data).sum(axis=0)==0)
         data = mat.data.data
         data = data.rechunk(-1, 1000).astype('float32')
         data = daa.log2(data+0.1)
         mat['data'] = (('rows', 'cols'), data)
-        mat = _add_locs(mat)
+
+        mat = mat.rename({'map_location': 'cyto'})
+        mat['arm'] = mat.cyto.str.replace('^([^pq]*[pq]).*$', r'\1', regex=True)
+
         mat['cyto_dummy'] = _loc_dummy(mat.cyto)
         return mat
 
