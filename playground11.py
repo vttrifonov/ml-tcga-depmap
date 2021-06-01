@@ -15,6 +15,7 @@ import pandas as pd
 import importlib
 import dask_ml.preprocessing as dmlp
 import plotly.express as px
+import dask
 
 import depmap_gdc_fit
 importlib.reload(depmap_gdc_fit)
@@ -56,10 +57,92 @@ def _rfft(x, n):
 
 m = gdf.merge()._merge
 
-d = m.dm_cnv
+d = m.dm_cnv.copy()
+d = d.sel(cols=~(d.arm=='-'))
 d['txMid'] = (d.txStart+d.txEnd)/2
 d = d.sortby(['chrom', 'txMid'])
 m.dm_cnv = d
+
+d = m.gdc_cnv.copy()
+d['txMid'] = (d.txStart+d.txEnd)/2
+d.data.data = d.data.data.rechunk((None, -1))
+with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+    d = d.sortby(['chrom', 'txMid'])
+m.gdc_cnv = d
+
+def _cnv_fft1(d1, g):
+    f = xa.Dataset()
+
+    d = d1.groupby(g)
+    d = [
+        xa.apply_ufunc(
+            _fft, x,
+            input_core_dims = [['cols']], output_core_dims=[['freq']],
+            dask='allowed'
+        ).assign_coords({
+            'fft_'+g: ('freq', x[g]),
+            'fft_freq': ('freq', np.arange(x.shape[1]))
+        }).assign_coords({
+            'freq': lambda x: ('freq', x['fft_'+g] + ':' + x.fft_freq.astype(str))
+        })
+        for arm, x in d
+    ]
+    d = xa.concat(d, 'freq')
+    d.data = d.data.rechunk(m.dm_cnv.data.data.chunks)
+    f['fft'] = d
+    print('hi1')
+
+    d = f.fft.groupby('fft_'+g)
+    d = [
+        xa.apply_ufunc(
+            _rfft, x, min(10, x.shape[1]),
+            input_core_dims = [['freq'], []], output_core_dims=[['cols']],
+            dask='allowed'
+        ).assign_coords({
+            'cols': d1.cols.sel(cols=d1[g]==l)
+        })
+        for l, x in d
+    ]
+    d = xa.concat(d, 'cols')
+    f['rfft'] = d
+    f['fft_resid'] = d1 - f.rfft
+    print('hi2')
+
+    x1 = (f.fft_resid**2).mean(axis=0).rename('mean').\
+        assign_coords({g: d1[g]}).to_dataframe().reset_index()
+    x1 = x1.query('mean>0.1').copy()
+    x2 = x1[g].to_numpy()
+    x2 = np.hstack([True, x2[1:]!=x2[:-1]])
+    x3 = x1.index.to_numpy()
+    x3 = np.hstack([True, x3[1:]!=(x3[:-1]+1)])
+    x1['f'] = np.cumsum(x2 | x3)
+    x4 = np.zeros(m.dm_cnv.cols.shape[0])
+    x4[x1.index] = x1.f
+    f['fft_group'] = ('cols', x4)
+    print('hi3')
+
+    return f
+
+d = _cnv_fft1(m.dm_cnv.data.assign_coords(arm=m.dm_cnv.arm), 'arm')
+d.rfft.data = d.rfft.data.rechunk(m.dm_cnv.data.chunks)
+d.fft_resid.data = d.fft_resid.data.rechunk(m.dm_cnv.data.chunks)
+d = d.sel(cols=m.dm_cnv.cols)
+d = d.drop('arm')
+m.dm_cnv = m.dm_cnv.merge(d)
+
+def _svd1():
+    x3 = m.dm_cnv.fft_resid
+    x3 = x3.assign_coords(fft_group=m.dm_cnv.fft_group)
+    x3 = x3.sel(cols=x3.fft_group>0)
+    x4 = m.dm_cnv.fft.sel(freq=m.dm_cnv.fft.fft_freq<10)
+    x4 = x4.rename({'freq': 'cols'}).drop(['fft_arm', 'fft_freq'])
+    x4['fft_group'] = ('cols', np.zeros(x4.shape[1]))
+    x3 = xa.concat([x3, x4], 'cols')
+    x3 = dmlp.StandardScaler().fit_transform(x3)
+    x3 = x3.groupby('fft_group')
+    x3 = {k: gdf.SVD.from_mat(x).persist() for k, x in x3}
+    m.dm_cnv_fft_svd = x3
+    print('hi4')
 
 def _cnv_fft():
     d = m.dm_cnv.data.assign_coords(arm=m.dm_cnv.arm).groupby('arm')
@@ -149,9 +232,10 @@ d.data = d.data.rechunk((None, -1))
 m.dm_cnv['smooth'] = d
 m.dm_cnv['smooth_resid'] = (m.dm_cnv.data - m.dm_cnv.smooth).persist()
 
+x1 = m.dm_cnv
 px.scatter(
-    (m.dm_cnv.fft_resid**2).mean(axis=0).rename('mean').\
-        assign_coords(arm=m.dm_cnv.arm, cyto=m.dm_cnv.cyto).\
+    (x1.fft_resid**2).mean(axis=0).rename('mean').\
+        assign_coords(arm=x1.arm, cyto=x1.cyto).\
         to_dataframe().reset_index().reset_index().\
         query('mean>=0')
     ,

@@ -14,6 +14,7 @@ import ensembl.sql.ensembl as ensembl
 import json
 import sparse
 import ncbi.sql.ncbi as ncbi
+import ucsc_gb.sql as ucsc
 
 config.exec()
 
@@ -261,6 +262,28 @@ class CNV:
         return map_location
 
     @lazy_property
+    @cached_property(type=Dir.pickle)
+    def mat3_col_tx(self):
+        cols = self.mat3_cols[['new_cols', 'symbol']].to_dataframe()
+        tx = ucsc.query(ucsc.sql['refseq_tx'], 'hg38')
+        tx = tx[['name2', 'chrom', 'strand', 'txStart', 'txEnd']]
+        tx = tx.groupby(['name2', 'chrom', 'strand']).agg(
+            txStart_min=('txStart', 'min'),
+            txStart_max=('txStart', 'max'),
+            txEnd_min=('txEnd', 'min'),
+            txEnd_max=('txEnd', 'max')
+        )
+        tx = tx.reset_index()
+        tx['txStart'] = np.where(tx.strand=='+', tx.txStart_min, tx.txStart_max)
+        tx['txEnd'] = np.where(tx.strand == '+', tx.txEnd_max, tx.txEnd_min)
+        tx = tx.groupby('name2').filter(lambda x: x.shape[0]==1)
+        tx = cols.set_index('symbol').\
+            join(tx.set_index('name2'), how='inner')
+        tx = tx.rename(columns={'new_cols': 'cols'})
+        tx = tx.reset_index(drop=True)[['cols', 'chrom', 'strand', 'txStart', 'txEnd']].drop_duplicates()
+        return tx
+
+    @lazy_property
     def mat3(self):
         new_cols = self.mat3_cols
         new_rows = self.mat3_rows
@@ -275,8 +298,13 @@ class CNV:
         data = daa.log2(data+0.1)
         mat['data'] = (('new_rows', 'cols'),  data)
         mat = mat.drop('rows').rename({'new_rows': 'rows'})
+
         mat = mat.merge(self.mat3_col_map_location.set_index('cols'), join='inner')
-        mat = _add_locs(mat)
+        mat = mat.rename({'map_location': 'cyto'})
+        mat['arm'] = mat.cyto.str.replace('^([^pq]*[pq]).*$', r'\1', regex=True)
+
+        mat = mat.merge(self.mat3_col_tx.set_index('cols'), join='inner')
+
         mat['cyto_dummy'] = _loc_dummy(mat.cyto)
         return mat
 
