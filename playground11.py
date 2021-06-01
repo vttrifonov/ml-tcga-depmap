@@ -48,36 +48,22 @@ def _fft(x):
     return fft
 
 def _rfft(x, n):
-    if n > 0:
-        rfft = daa.hstack([x[:, :n], daa.zeros((x.shape[0], x.shape[1] - n))])
+    rfft = x[:, :n]
+    if x.shape[1] > n:
+        rfft = daa.hstack([rfft, daa.zeros((x.shape[0], x.shape[1] - n))])
     rfft = rfft.rechunk((None, -1))
     rfft = daa.fft.irfft(rfft)
     rfft = rfft[:, :x.shape[1]]
     return rfft
 
-m = gdf.merge()._merge
-
-d = m.dm_cnv.copy()
-d = d.sel(cols=~(d.arm=='-'))
-d['txMid'] = (d.txStart+d.txEnd)/2
-d = d.sortby(['chrom', 'txMid'])
-m.dm_cnv = d
-
-d = m.gdc_cnv.copy()
-d['txMid'] = (d.txStart+d.txEnd)/2
-d.data.data = d.data.data.rechunk((None, -1))
-with dask.config.set(**{'array.slicing.split_large_chunks': False}):
-    d = d.sortby(['chrom', 'txMid'])
-m.gdc_cnv = d
-
-def _cnv_fft1(d1, g):
+def _cnv_fft1(d1, cutoff, g, cols):
     f = xa.Dataset()
 
     d = d1.groupby(g)
     d = [
         xa.apply_ufunc(
             _fft, x,
-            input_core_dims = [['cols']], output_core_dims=[['freq']],
+            input_core_dims = [[cols]], output_core_dims=[['freq']],
             dask='allowed'
         ).assign_coords({
             'fft_'+g: ('freq', x[g]),
@@ -85,25 +71,27 @@ def _cnv_fft1(d1, g):
         }).assign_coords({
             'freq': lambda x: ('freq', x['fft_'+g] + ':' + x.fft_freq.astype(str))
         })
-        for arm, x in d
+        for _, x in d
     ]
     d = xa.concat(d, 'freq')
-    d.data = d.data.rechunk(m.dm_cnv.data.data.chunks)
+    d.data = d.data.rechunk(d1.data.chunks)
     f['fft'] = d
     print('hi1')
 
-    d = f.fft.groupby('fft_'+g)
+    d = f.fft.groupby('fft_' + g)
     d = [
         xa.apply_ufunc(
-            _rfft, x, min(10, x.shape[1]),
-            input_core_dims = [['freq'], []], output_core_dims=[['cols']],
+            _rfft, x, min(cutoff, x.shape[1]),
+            input_core_dims = [['freq'], []], output_core_dims=[[cols]],
             dask='allowed'
         ).assign_coords({
-            'cols': d1.cols.sel(cols=d1[g]==l)
+            cols: d1[cols].sel({cols: d1[g]==l})
         })
         for l, x in d
     ]
-    d = xa.concat(d, 'cols')
+    d = xa.concat(d, cols)
+    d = d.sel({cols: d1.cols})
+    d.data = d.data.rechunk(d1.data.chunks)
     f['rfft'] = d
     f['fft_resid'] = d1 - f.rfft
     print('hi2')
@@ -116,97 +104,51 @@ def _cnv_fft1(d1, g):
     x3 = x1.index.to_numpy()
     x3 = np.hstack([True, x3[1:]!=(x3[:-1]+1)])
     x1['f'] = np.cumsum(x2 | x3)
-    x4 = np.zeros(m.dm_cnv.cols.shape[0])
+    x4 = np.zeros(d1[cols].shape[0])
     x4[x1.index] = x1.f
-    f['fft_group'] = ('cols', x4)
+    f['fft_group'] = (cols, x4.astype(int))
     print('hi3')
 
     return f
 
-d = _cnv_fft1(m.dm_cnv.data.assign_coords(arm=m.dm_cnv.arm), 'arm')
-d.rfft.data = d.rfft.data.rechunk(m.dm_cnv.data.chunks)
-d.fft_resid.data = d.fft_resid.data.rechunk(m.dm_cnv.data.chunks)
-d = d.sel(cols=m.dm_cnv.cols)
+def _svd1(d, cutoff, cols):
+    x3 = d.fft_resid
+    x3 = x3.assign_coords(fft_group=d.fft_group)
+    x3 = x3.sel({cols: x3.fft_group>0})
+    x4 = d.fft.sel(freq=d.fft.fft_freq<cutoff)
+    x4 = x4.rename({'freq': 'cols'}).drop(['fft_arm', 'fft_freq'])
+    x4['fft_group'] = ('cols', np.zeros(x4.shape[1], dtype=int))
+    x3 = xa.concat([x3, x4], 'cols')
+    x3 = dmlp.StandardScaler().fit_transform(x3)
+    x3 = x3.groupby('fft_group')
+    x3 = {k: gdf.SVD.from_mat(x) for k, x in x3}
+    return x3
+
+m = gdf.merge()._merge
+
+d = m.dm_cnv.copy()
+d = d.sel(cols=~(d.arm=='-'))
+d['txMid'] = (d.txStart+d.txEnd)/2
+d = d.sortby(['chrom', 'txMid'])
+m.dm_cnv = d
+
+d = m.gdc_cnv.copy()
+d = d.sel(cols=~(d.arm=='-'))
+d['txMid'] = (d.txStart+d.txEnd)/2
+d.data.data = d.data.data.rechunk((None, -1))
+with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+    d = d.sortby(['chrom', 'txMid'])
+m.gdc_cnv = d
+
+d = _cnv_fft1(m.dm_cnv.data.assign_coords(arm=m.dm_cnv.arm), 10, 'arm', 'cols')
 d = d.drop('arm')
 m.dm_cnv = m.dm_cnv.merge(d)
+#m.dm_cnv_fft_svd = _svd1(m.dm_cnv, 10, 'cols')
 
-def _svd1():
-    x3 = m.dm_cnv.fft_resid
-    x3 = x3.assign_coords(fft_group=m.dm_cnv.fft_group)
-    x3 = x3.sel(cols=x3.fft_group>0)
-    x4 = m.dm_cnv.fft.sel(freq=m.dm_cnv.fft.fft_freq<10)
-    x4 = x4.rename({'freq': 'cols'}).drop(['fft_arm', 'fft_freq'])
-    x4['fft_group'] = ('cols', np.zeros(x4.shape[1]))
-    x3 = xa.concat([x3, x4], 'cols')
-    x3 = dmlp.StandardScaler().fit_transform(x3)
-    x3 = x3.groupby('fft_group')
-    x3 = {k: gdf.SVD.from_mat(x).persist() for k, x in x3}
-    m.dm_cnv_fft_svd = x3
-    print('hi4')
-
-def _cnv_fft():
-    d = m.dm_cnv.data.assign_coords(arm=m.dm_cnv.arm).groupby('arm')
-    d = [
-        xa.apply_ufunc(
-            _fft, x,
-            input_core_dims = [['cols']], output_core_dims=[['freq']],
-            dask='allowed'
-        ).assign_coords({
-            'fft_arm': ('freq', x.arm),
-            'fft_freq': ('freq', np.arange(x.shape[1]))
-        }).assign_coords({
-            'freq': lambda x: ('freq', x.fft_arm + ':' + x.fft_freq.astype(str))
-        })
-        for arm, x in d
-    ]
-    d = xa.concat(d, 'freq')
-    d.data = d.data.rechunk(m.dm_cnv.data.data.chunks)
-    m.dm_cnv['fft'] = d.persist()
-    print('hi1')
-
-    d = m.dm_cnv.fft.groupby('fft_arm')
-    d = [
-        xa.apply_ufunc(
-            _rfft, x, min(10, x.shape[1]),
-            input_core_dims = [['freq'], []], output_core_dims=[['cols']],
-            dask='allowed'
-        ).assign_coords({
-            'cols': m.dm_cnv.cols.sel(cols=m.dm_cnv.arm==arm)
-        })
-        for arm, x in d
-    ]
-    d = xa.concat(d, 'cols')
-    m.dm_cnv['rfft'] = d.persist()
-    m.dm_cnv['fft_resid'] = (m.dm_cnv.data - m.dm_cnv['rfft']).persist()
-    print('hi2')
-
-    x1 = (m.dm_cnv.fft_resid**2).mean(axis=0).rename('mean').\
-        assign_coords(arm=m.dm_cnv.arm).to_dataframe().reset_index()
-    x1 = x1.query('mean>0.1').copy()
-    x2 = x1.arm.to_numpy()
-    x2 = np.hstack([True, x2[1:]!=x2[:-1]])
-    x3 = x1.index.to_numpy()
-    x3 = np.hstack([True, x3[1:]!=(x3[:-1]+1)])
-    x1['f'] = np.cumsum(x2 | x3)
-    x4 = np.zeros(m.dm_cnv.cols.shape[0])
-    x4[x1.index] = x1.f
-    m.dm_cnv['fft_group'] = ('cols', x4)
-    print('hi3')
-
-    x3 = m.dm_cnv.fft_resid
-    x3 = x3.assign_coords(fft_group=m.dm_cnv.fft_group)
-    x3 = x3.sel(cols=x3.fft_group>0)
-    x4 = m.dm_cnv.fft.sel(freq=m.dm_cnv.fft.fft_freq<10)
-    x4 = x4.rename({'freq': 'cols'}).drop(['fft_arm', 'fft_freq'])
-    x4['fft_group'] = ('cols', np.zeros(x4.shape[1]))
-    x3 = xa.concat([x3, x4], 'cols')
-    x3 = dmlp.StandardScaler().fit_transform(x3)
-    x3 = x3.groupby('fft_group')
-    x3 = {k: gdf.SVD.from_mat(x).persist() for k, x in x3}
-    m.dm_cnv_fft_svd = x3
-    print('hi4')
-
-_cnv_fft()
+d = _cnv_fft1(m.gdc_cnv.data.assign_coords(arm=m.gdc_cnv.arm), 10, 'arm', 'cols')
+d = d.drop('arm')
+m.gdc_cnv = m.gdc_cnv.merge(d)
+#m.gdc_cnv_fft_svd = _svd1(m.gdc_cnv, 10, 'cols')
 
 #expr_cyto = gdf.SVD.from_mat(m.expr.cyto_dummy).persist()
 
@@ -232,7 +174,7 @@ d.data = d.data.rechunk((None, -1))
 m.dm_cnv['smooth'] = d
 m.dm_cnv['smooth_resid'] = (m.dm_cnv.data - m.dm_cnv.smooth).persist()
 
-x1 = m.dm_cnv
+x1 = m.gdc_cnv
 px.scatter(
     (x1.fft_resid**2).mean(axis=0).rename('mean').\
         assign_coords(arm=x1.arm, cyto=x1.cyto).\
@@ -243,15 +185,28 @@ px.scatter(
     hover_data=['cyto', 'cols']
 ).show()
 
+x1 = m.gdc_cnv
 px.scatter(
-    m.dm_cnv.rfft.loc['ACH-000152',:].\
+    x1.rfft[0,:].\
         assign_coords(
-            data=m.dm_cnv.data.loc['ACH-000152',:],
-            arm=m.dm_cnv.arm, cyto=m.dm_cnv.cyto
+            data=x1.data[0,:],
+            arm=x1.arm, cyto=x1.cyto
         ).\
         to_dataframe().reset_index().reset_index(),
     x='index', y=['rfft', 'data'], color='arm',
     hover_data=['cyto', 'cols']
+).show()
+
+x1 = (m.dm_cnv.fft_resid**2).mean(axis=0)
+x2 = (m.gdc_cnv.fft_resid**2).mean(axis=0)
+x3 = xa.merge([x1.rename('dm'), x2.rename('gdc')])
+x3 = x3.to_dataframe().reset_index()
+#x3 = x3.query('dm>0.1 & gdc>0.1')
+np.corrcoef(x3.dm, x3.gdc)
+px.scatter(
+    x3,
+    x='dm', y='gdc',
+    hover_data=['cols']
 ).show()
 
 x1 = m.crispr.data.sel(rows=m.dm_cnv.rows.values).data.rechunk((-1, 1000)).to_zarr('tmp/crispr/mat')
