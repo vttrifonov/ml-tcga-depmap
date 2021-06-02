@@ -165,6 +165,7 @@ class CNV:
 
         mat = mat.rename({'map_location': 'cyto'})
         mat['arm'] = mat.cyto.str.replace('^([^pq]*[pq]).*$', r'\1', regex=True)
+        mat = mat.sel(cols=mat.arm!='-')
 
         mat['cyto_dummy'] = _loc_dummy(mat.cyto)
         return mat

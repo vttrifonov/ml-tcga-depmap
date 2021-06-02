@@ -302,6 +302,7 @@ class CNV:
         mat = mat.merge(self.mat3_col_map_location.set_index('cols'), join='inner')
         mat = mat.rename({'map_location': 'cyto'})
         mat['arm'] = mat.cyto.str.replace('^([^pq]*[pq]).*$', r'\1', regex=True)
+        mat = mat.sel(cols=mat.arm!='-')
 
         mat = mat.merge(self.mat3_col_tx.set_index('cols'), join='inner')
 
