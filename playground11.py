@@ -110,7 +110,7 @@ def _fft2(x1, g):
     #f['fft_group'] = (cols, x4.astype(int))
     #print('hi3')
 
-def _svd1(d, cutoff, cols):
+def _svd1(d, cutoff, cols, rand = False):
     x3 = d.fft_resid
     x3 = x3.assign_coords(fft_group=d.fft_group)
     x3 = x3.sel({cols: ~x3.fft_group.isnull()})
@@ -119,6 +119,8 @@ def _svd1(d, cutoff, cols):
     x4['fft_group'] = ('cols', np.zeros(x4.shape[1], dtype=int))
     x3 = xa.concat([x3, x4], 'cols')
     x3 = dmlp.StandardScaler().fit_transform(x3)
+    if rand:
+        x3.data = daa.apply_along_axis(np.random.permutation, 0, x3.data, shape=(x3.shape[0],), dtype=x3.dtype)
     x3 = x3.groupby('fft_group')
     x3 = {k: gdf.SVD.from_mat(x) for k, x in x3}
     return x3
@@ -179,14 +181,44 @@ d = _fft1(m.gdc_cnv.data.assign_coords(arm=m.gdc_cnv.arm), 10, 'arm', 'cols')
 d = d.drop('arm')
 m.gdc_cnv = m.gdc_cnv.merge(d)
 
+
 x1 = (m.dm_cnv.fft_resid**2).mean(axis=0)
 x2 = (m.gdc_cnv.fft_resid**2).mean(axis=0)
 x3 = xa.merge([x1.rename('dm'), x2.rename('gdc')])
 x3['arm'] = m.dm_cnv.arm
 x3 = x3.to_dataframe().reset_index()
-x3 = x3.query('dm>0.1 & gdc>0.1')
-x3['g'] = _fft2(x3, 'arm')
-m.dm_cnv['fft_group'] = x3.set_index('cols').g
+
+x1 = m.dm_cnv.fft_resid.data
+x1 = x1/daa.sqrt((x1**2).sum(axis=0, keepdims=True))
+x1 = x1[:,1:] * x1[:,:-1]
+x1 = x1.sum(axis=0)
+x1 = x1.compute()
+x3['dm_cor'] = np.hstack([x1, [0]])
+
+x1 = m.gdc_cnv.fft_resid.data
+x1 = x1/daa.sqrt((x1**2).sum(axis=0, keepdims=True))
+x1 = x1[:,1:] * x1[:,:-1]
+x1 = x1.sum(axis=0)
+x1 = x1.compute()
+x3['gdc_cor'] = np.hstack([x1, [0]])
+
+x1 = x3.arm.to_numpy()
+x1 = np.hstack([True, x1[1:] != x1[:-1]])
+x2 = np.hstack([True, (x3.dm_cor<0.3)[:-1]])
+x3['g1'] = np.cumsum(x1 | x2)
+
+x3['dm_n'] = x3.groupby('g1').dm.transform(lambda x: sum(x>0.1))
+x3['gdc_n'] = x3.groupby('g1').gdc.transform(lambda x: sum(x>0.1))
+x3['t'] = (x3.gdc>0.1) & (x3.dm>0.1)
+x3['both_n'] = x3.groupby('g1').t.transform(lambda x: sum(x>0.1))
+
+x4 = x3.query('both_n>0').copy()
+x4['g2'] = x4.g1.astype('category').cat.codes+1
+#x = list(x4.groupby('g2'))[0][1]
+x4 = x4.groupby('g2').apply(lambda x: x.loc[x.index[x.t][0]:(x.index[x.t][-1]),:])
+m.dm_cnv['fft_group'] = x4.set_index('cols').g2.astype(int)
+
+x4.query('g2==28 & t==True')
 
 np.corrcoef(x3.dm, x3.gdc)
 x3['g1'] = x3.g.astype(str)
@@ -196,9 +228,55 @@ px.scatter(
     hover_data=['cols']
 ).show()
 
+
+
 m.dm_cnv_fft_svd = _svd1(m.dm_cnv, 10, 'cols')
+m.dm_cnv_fft_svd_rand = _svd1(m.dm_cnv, 10, 'cols', True)
+
+
 
 #m.gdc_cnv_fft_svd = _svd1(m.gdc_cnv, 10, 'cols')
+
+x1 = [x.u[:, :1].data for x in m.dm_cnv_fft_svd.values()]
+x1 = daa.hstack(x1)
+#x1 = daa.apply_along_axis(np.random.permutation, 0, x1, shape=(x1.shape[0],))
+x1 = x1.compute()
+x1 = x1.T @ x1
+x3 = x1[np.triu_indices(x1.shape[0], 1)]
+#plt.plot(sorted(x2), sorted(x3), '.')
+#plt.gca().axline((0,0), slope=1)
+
+plt.imshow(((x1-np.diag(np.diag(x1)))), aspect='auto', cmap=plt.get_cmap('bwr'))
+
+plt.hist(x3, 100)
+
+x1 = [x.ve.data for x in m.dm_cnv_fft_svd.values()]
+x1 = daa.hstack(x1)
+x1 = x1.compute()
+x4 = [x.ve.data for x in m.dm_cnv_fft_svd_rand.values()]
+x4 = daa.hstack(x4)
+x4 = x4.compute()
+x2 = pd.DataFrame(dict(
+    fft_group_pc = np.hstack([np.repeat(i, x.s.shape[0]) for i, x in m.dm_cnv_fft_svd.items()]).astype(int),
+    pc = np.hstack([np.arange(x.s.shape[0]) for _, x in m.dm_cnv_fft_svd.items()]).astype(int),
+    n = np.hstack([np.repeat(x.s.shape[0], x.s.shape[0]) for _, x in m.dm_cnv_fft_svd.items()]),
+    ve = x1,
+    ve_rand = x4
+))
+#x3 = x2.query('n>20 & pc==20')
+#plt.plot(x3.n, x3.ve, '.')
+#plt.plot(x3.n, x3.ve_rand, '.')
+x2 = x2.query('n==1 | ve_rand-ve>=1e-4').groupby('fft_group_pc').first()
+m.dm_cnv['fft_svd_pc'] = x2.pc+1
+
+
+x1 = m.dm_cnv_fft_svd[0].ve.values
+x2 = m.dm_cnv_fft_svd_rand[0].ve.values
+plt.hist(np.sqrt(x1), 50)
+plt.hist(np.sqrt(x2), 50)
+plt.plot(x1, x2, '.')
+plt.gca().axline((0,0), slope=1)
+
 
 #expr_cyto = gdf.SVD.from_mat(m.expr.cyto_dummy).persist()
 
@@ -236,28 +314,56 @@ px.scatter(
 ).show()
 
 
-x1 = m.crispr.data.sel(rows=m.dm_cnv.rows.values).data.rechunk((-1, 1000)).to_zarr('tmp/crispr/mat')
-x1 = daa.from_zarr('tmp/crispr/mat')
-x2 = [x.u[:,:].data for x in m.dm_cnv_fft_svd.values()]
+s = '.cache/merge/crispr/fft_cnv'
+x1 = m.crispr.data.sel(rows=m.dm_cnv.rows.values).data.rechunk((-1, 1000)).to_zarr(s+'/mat')
+x1 = daa.from_zarr(s+'/mat')
+x2 = [x.u[:,:int(m.dm_cnv.fft_svd_pc[int(i)].item())].data for i, x in m.dm_cnv_fft_svd.items()]
 x2 = [((x1 - x @ (x.T @ x1))**2).mean(axis=0) for x in x2]
 x2 = daa.stack(x2).persist()
 x2 = x2.rechunk((-1, None))
-x4 = [x.perm.u[:,:].data for x in m.dm_cnv_fft_svd.values()]
+x4 = [x.perm.u[:,:int(m.dm_cnv.fft_svd_pc[int(i)].item())].data for i, x in m.dm_cnv_fft_svd.items()]
 x4 = [((x1 - x @ (x.T @ x1))**2).mean(axis=0) for x in x4]
 x4 = daa.stack(x4).persist()
 x4 = x4.rechunk((-1, None))
-x2.to_zarr('tmp/crispr/obs')
-x4.to_zarr('tmp/crispr/rand')
+x2.to_zarr(s+'/obs')
+x4.to_zarr(s+'/rand')
 
-x2 = daa.from_zarr('tmp/crispr/obs')
-x4 = daa.from_zarr('tmp/crispr/rand')
+x2 = daa.from_zarr(s+'/obs')
+x4 = daa.from_zarr(s+'/rand')
 
 x5 = dmlp.StandardScaler().fit(daa.log10(1-x4+1e-5).T)
 x6 = x5.transform(daa.log10(1-x2+1e-5).T).T.persist()
+#m.crispr = m.crispr.drop(['fft_group', 'cnv_rand_mean', 'cnv_rand_var', 'cnv_r2'])
 m.crispr['cnv_rand_mean'] = ('fft_group', x5.mean_)
 m.crispr['cnv_rand_var'] = ('fft_group', x5.var_)
 m.crispr['cnv_r2'] = (('fft_group', 'cols'), x6)
 m.crispr['fft_group'] = ('fft_group', np.arange(x2.shape[0]))
+
+(m.crispr.cnv_r2[1:,:]>3).sum(axis=1).to_series().sort_values()
+
+m.crispr.cnv_r2[28,:].to_series().pipe(lambda x: x[x>3]).sort_values()
+
+m.crispr.cols.sel(cols=m.crispr.symbol=='TP53')
+
+(m.crispr.cnv_r2[1:,:]>2).sum(axis=0).to_series().sort_values().pipe(lambda x: x[x>0])['TP53 (7157)']
+
+x5 = 'TP53 (7157)'
+x1 = m.crispr.cnv_r2.loc[1:,x5].to_series().pipe(lambda x: x[x>2]).index
+x1 = [0] + list(x1)
+x1 = [x.u[:,:int(m.dm_cnv.fft_svd_pc[int(i)].item())] for i, x in m.dm_cnv_fft_svd.items() if i in x1]
+x6 = m.dm_expr.data
+x6 = x6 - x1[0] @ (x1[0].T @ x6)
+x6 = gdf.SVD.from_mat(x6).u[:,:300].persist()
+x1 = x1 + [x6]
+x1 = [x.assign_coords(pc=([str(i)+':'+x for x in x.pc.values.astype(str)])) for i, x in enumerate(x1)]
+x1 = xa.concat(x1, 'pc').rename({'pc': 'cols'})
+x1 = gdf.SVD.from_mat(x1).persist()
+x2 = m.crispr.data.loc[:,x5].compute()
+x3 = x1.u
+x3 = (x3 @ (x3.T @ x2)).compute()
+plt.plot(x2, x3, '.')
+print((1-(x2-x3)**2).mean().values.round(2), np.array(x1.u.shape[1]/x1.u.shape[0]).round(2))
+
 
 x5 = _fit(m.crispr.data, m.dm_expr.data, 400)
 m.crispr = m.crispr.merge(x5.rename({'rand_mean': 'expr_rand_mean', 'rand_var': 'expr_rand_var', 'r2': 'expr_r2'}))
@@ -272,15 +378,43 @@ plt.figure()
 plt.gca().plot(m.crispr.expr_r2, m.crispr.cnv_r2[1:,:].mean(axis=0), '.')
 
 plt.figure()
-plt.gca().plot(m.crispr.cnv_r2[0,:], m.crispr.cnv_r2[80,:], '.')
-
+plt.gca().plot(m.crispr.cnv_r2[0,:], m.crispr.cnv_r2[1,:], '.')
 
 pd.DataFrame(dict(
     expr=(m.crispr.expr_r2 > 2).values,
     cnv_glob = (m.crispr.cnv_r2[0,:]>2).values,
-    cnv_loc = ((m.crispr.cnv_r2[1:,:]>2).sum(axis=0)>2).values
+    cnv_loc = ((m.crispr.cnv_r2[1:,:]>2).sum(axis=0)>2).valuesa
 )).value_counts().sort_index()#.reset_index().pivot(index='loc', columns='glob')
 
+
+x1 = [x.u[:,:m.dm_cnv.fft_svd_pc[int(i)].item()] for i, x in m.dm_cnv_fft_svd.items()][1:]
+x1 = [x.assign_coords(pc=([str(i)+':'+x for x in x.pc.values.astype(str)])) for i, x in enumerate(x1)]
+x1 = xa.concat(x1, 'pc')
+x1 = x1.persist()
+x1 = x1.rename({'pc': 'cols'})
+x3 = gdf.SVD.from_mat(x1).persist()
+x2 = _fit(m.crispr.data, x1, 600)
+plt.plot(m.crispr.cnv_r2[0,:], x2.r2.compute(), '.')
+pd.DataFrame(dict(
+    cnv_glob = (m.crispr.cnv_r2[0,:]>2).values,
+    x2 = (x2.r2>2).values
+)).value_counts().sort_index()
+
+#x1 = m.dm_cnv_fft_svd[0].u[:,:m.dm_cnv.fft_svd_pc[0].item()].persist()
+x1 = m.dm_cnv_fft_svd[0].u[:,:].persist()
+x2 = m.dm_expr.data
+x2 = x2 - x1 @ (x1.T @ x2)
+x2 = dmlp.StandardScaler().fit_transform(x2)
+x2 = x2.persist()
+x2 = gdf.SVD.from_mat(x2)
+x2 = x2.u[:,:400]
+x2 = x2.persist()
+x3 = [x.assign_coords(pc=([str(i)+':'+x for x in x.pc.values.astype(str)])) for i, x in enumerate([x2])]
+x3 = xa.concat(x3, 'pc')
+x3 = x3.rename(pc='cols')
+x4 = _fit(m.crispr.data, x3, x3.shape[1])
+plt.plot(m.crispr.cnv_r2[0,:], x4.r2.compute(), '.')
+plt.plot(m.crispr.expr_r2, x4.r2.compute(), '.')
 
 
 x1 = m.crispr.data
