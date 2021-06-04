@@ -28,7 +28,7 @@ pd.set_option('display.width', 1000)
 
 config.exec()
 
-def smooth(x, window_len=11, window='hanning'):
+def _smooth(x, window_len=11, window='hanning'):
     if len(x) < window_len:
         return x
 
@@ -149,7 +149,7 @@ def _smooth1(d1, frac, g, cols):
     d = d1.groupby(g)
     d = d.map(lambda x: (
         xa.apply_ufunc(
-            smooth, x, int(frac*x.shape[1]),
+            _smooth, x, int(frac*x.shape[1]),
             input_core_dims = [[cols], []], output_core_dims=[[cols]],
             dask='parallelized', vectorize=True
         )
@@ -313,6 +313,43 @@ def _():
     _playground11.dm_cnv_fft_svd_pc = lazy_property(_dm_cnv_fft_svd_pc)
     # del self.__lazy___dm_cnv_fft_svd_pc
 
+    def _dm_expr1(self):
+        x1 = self.dm_cnv_fft_svd[0]
+        x1 = x1.u[:,:int(self.dm_cnv_fft_svd_pc[0].item())]
+        x6 = self.dm_expr.data
+        x6 = x6 - x1[0] @ (x1[0].T @ x6)
+        return x6
+    _playground11.dm_expr1 = property(_dm_expr1)
+
+    def _dm_expr_svd(self):
+        x6 = self.dm_expr1
+        x6 = dmlp.StandardScaler().fit_transform(x6)
+        return gdf.SVD.from_mat(x6)
+    _playground11.dm_expr_svd = lazy_property(_dm_expr_svd)
+    # del self.__lazy___dm_expr_svd
+
+    def _dm_expr_svd_rand(self):
+        x6 = self.dm_expr1
+        x6 = dmlp.StandardScaler().fit_transform(x6)
+        x6.data = daa.apply_along_axis(np.random.permutation, 0, x6.data, shape=(x6.shape[0],), dtype=x6.dtype)
+        return gdf.SVD.from_mat(x6)
+    _playground11.dm_expr_svd_rand = lazy_property(_dm_expr_svd_rand)
+    # del self.__lazy___dm_expr_svd_rand
+
+    def _dm_expr_svd_pc(self):
+        m = self
+        x1 =  m.dm_expr_svd.ve.compute()
+        x4 = m.dm_expr_svd_rand.ve.compute()
+        x2 = pd.DataFrame(dict(
+            pc = np.arange(m.dm_expr_svd.s.shape[0]),
+            ve = x1,
+            ve_rand = x4
+        ))
+        x2 = x2.query('ve_rand-ve>=1e-4').pc.iloc[0]
+        return x2+1
+    _playground11.dm_expr_svd_pc = lazy_property(_dm_expr_svd_pc)
+    # del self.__lazy___dm_expr_svd_pc
+
     def _crispr_cnv_fit(self):
         s = self.storage/'crispr'/'cnv_fit'
         if not s.exists():
@@ -349,40 +386,149 @@ def _():
         return _fit(self.crispr.data, self.dm_expr.data, 400)
     _playground11.crispr_expr_fit = lazy_property(_crispr_expr_fit)
     # del self.__lazy___crispr_expr_fit
+
+    def _crispr_model(self):
+        def model(x5):
+            s = self.storage/'crispr_model'/x5
+            s = s.with_suffix('.zarr')
+            if not s.exists():
+                x1 = self.crispr_cnv_fit.r2.loc[1:,x5].to_series().pipe(lambda x: x[x>2]).index
+                x1 = [0] + list(x1)
+                x1 = [x.cut(np.s_[:int(self.dm_cnv_fft_svd_pc[int(i)].item())]).inv(0).xarray for i, x in self.dm_cnv_fft_svd.items() if i in x1]
+                x1 = [x.assign_coords(cols=['cnv:' + str(i) + ':' + s for s in x.cols.values]) for i, x in enumerate(x1)]
+                x1 = [x.drop('fft_group') for x in x1]
+                x4 = self.dm_expr_svd.cut(np.s_[:self.dm_expr_svd_pc]).u.rename(pc='cols')
+                x4 = gdf.SVD.from_mat(x4).xarray
+                x4 = x4.assign_coords(cols=['expr:' + str(s) for s in x4.cols.values])
+                x1 = x1 + [x4]
+                x1 = [x.assign_coords(pc=([str(i)+':'+x for x in x.pc.values.astype(str)])) for i, x in enumerate(x1)]
+                x1 = [x.assign_coords(model_group=('pc', np.repeat(i, x.s.shape[0]))) for i, x in enumerate(x1)]
+                x1 = [x.rename({'pc': 'pc_cols'}) for x in x1]
+
+                x2 = [x.v for x in x1]
+                x2 = xa.concat(x2, 'pc_cols')
+                x2 = gdf.SVD.from_mat(x2)
+                x2.u = x2.u.T @ self.crispr.data.loc[:,[x5]]
+                x2 = x2.xarray
+
+                x3 = [x2.sel(pc_cols=x2.model_group==i) for i in range(len(x1))]
+                x3 = [gdf.SVD.from_xarray(x[0]).us @ gdf.SVD.from_xarray(x[1]).vs for x in zip(x1, x3)]
+                x3 = xa.concat(x3, 'cols')
+                x3 = x3.rename(cols='rows')
+                x3 = x3.assign_coords(pc=[x5 + ':' + str(x) for x in x3.pc.values])
+
+                x2 = xa.merge([x2.u.rename('v'), x3.rename('u')])
+                x2 = x2.assign_coords(pc=[x5 + ':' + str(x) for x in x2.pc.values])
+                x2.u.data = x2.u.data.rechunk((-1, None)).astype('float16')
+                x2.v.data = x2.v.data.astype('float16')
+
+                s.parent.mkdir(parents=True, exist_ok=True)
+                x2.to_zarr(s)
+
+            x2 = xa.open_zarr(s, drop_variables=['u', 'v'])
+            x2['u'] = (('rows', 'pc'), daa.from_zarr(zarr.open(str(s/'u'))).astype('float32'))
+            x2['v'] = (('pc', 'cols'), daa.from_zarr(zarr.open(str(s/'v'))).astype('float32'))
+
+            return x2
+
+        def model(x5):
+            s = self.storage/'crispr_model'/x5
+            s = s.with_suffix('.zarr')
+            if not s.exists():
+                x1 = self.crispr_cnv_fit.r2.loc[1:,x5].to_series().pipe(lambda x: x[x>2]).index
+                x1 = [0] + list(x1)
+                x1 = [x.cut(np.s_[:int(self.dm_cnv_fft_svd_pc[int(i)].item())]).inv(0).xarray for i, x in self.dm_cnv_fft_svd.items() if i in x1]
+                x1 = [x.assign_coords(cols=['cnv:' + str(i) + ':' + s for s in x.cols.values]) for i, x in enumerate(x1)]
+                x1 = [x.drop('fft_group') for x in x1]
+                x4 = self.dm_expr_svd.cut(np.s_[:self.dm_expr_svd_pc]).u.rename(pc='cols')
+                x4 = gdf.SVD.from_mat(x4).xarray
+                x4 = x4.assign_coords(cols=['expr:' + str(s) for s in x4.cols.values])
+                x1 = x1 + [x4]
+                x1 = [x.assign_coords(pc=([str(i)+':'+x for x in x.pc.values.astype(str)])) for i, x in enumerate(x1)]
+                x1 = [x.assign_coords(model_group=('pc', np.repeat(i, x.s.shape[0]))) for i, x in enumerate(x1)]
+                x1 = [x.rename({'pc': 'pc_cols'}) for x in x1]
+
+                x2 = self.crispr.data.loc[:,[x5]].rename(rows='_rows')
+                x2 = [gdf.SVD.from_xarray(x).usv.T.rename(rows='_rows', cols='rows') @ x2 for x in x1]
+                x2 = xa.concat(x2, 'rows')
+                x2.data = x2.data.rechunk((-1, None)).astype('float16')
+
+                s.parent.mkdir(parents=True, exist_ok=True)
+                x2.rename('data').to_dataset().to_zarr(s)
+
+            return xa.DataArray(
+                daa.from_zarr(zarr.open(str(s / 'data'))).astype('float32'),
+                dims=('rows', 'cols'),
+                coords=xa.open_zarr(s, drop_variables=['data']).coords
+            )
+        x1 = [(print(x), model(x))[1] for x in self.crispr.cols.values[:3]]
+
+        x2 = [set(x.rows.values) for x in x1]
+        x2 = set().union(*x2)
+        x2 = list(x2)
+
+        x3 = [set(x.cols.values) for x in x1]
+        x3 = set().union(*x3)
+        x3 = list(x3)
+
+
+
+    _playground11.crispr_model = lazy_property(_crispr_model)
+    # del self.__lazy___crispr_model
+
+    def _predict(self, col = None, symbol = None, entrez = None):
+        if col is None:
+            if entrez is None:
+                if symbol is None:
+                    raise(ValueError('col or symbol or entrez'))
+                else:
+                    x5 = self.crispr.cols.sel(cols=self.crispr.symbol == symbol).item()
+            else:
+                x5 = self.crispr.cols.sel(cols=self.crispr.entrez == entrez).item()
+        else:
+            x5 = col
+
+        x1 = self.crispr_cnv_fit.r2.loc[1:,x5].to_series().pipe(lambda x: x[x>2]).index
+        x1 = [0] + list(x1)
+        x1 = [x.u[:,:int(self.dm_cnv_fft_svd_pc[int(i)].item())] for i, x in self.dm_cnv_fft_svd.items() if i in x1]
+        x1 = x1 + [self.dm_expr_svd.u[:,:self.dm_expr_svd_pc]]
+        x1 = [x.assign_coords(pc=([str(i)+':'+x for x in x.pc.values.astype(str)])) for i, x in enumerate(x1)]
+        x1 = xa.concat(x1, 'pc').rename({'pc': 'cols'})
+        x1 = gdf.SVD.from_mat(x1).persist()
+        x2 = self.crispr.data.loc[:,x5].compute()
+        x3 = x1.u
+        x3 = (x3 @ (x3.T @ x2)).compute()
+        return xa.merge([
+            x2.rename('obs'),
+            x3.rename('pred'),
+            (1 - (x2 - x3) ** 2).mean().rename('r2'),
+            xa.DataArray(
+                x1.u.shape[1] / x1.u.shape[0],
+                dims=(),
+                coords={'cols': x2.cols},
+                name='r2_rand'
+            )
+        ])
+    _playground11.predict = _predict
 _()
 
-plot_fft_resid(playground11.dm_cnv.merge(playground11.dm_cnv_fft))
-plot_fft(playground11.dm_cnv.merge(playground11.dm_cnv_fft))
+m = playground11
+plot_fft_resid(m.dm_cnv.merge(m.dm_cnv_fft))
+plot_fft(m.dm_cnv.merge(m.dm_cnv_fft))
+
 
 m = playground11
 (m.crispr_cnv_fit.r2[1:,:]>3).sum(axis=1).to_series().sort_values()
 
-m.crispr_cnv_fit.r2[28,:].to_series().pipe(lambda x: x[x>3]).sort_values()
 
-m.crispr.cols.sel(cols=m.crispr.symbol=='TP53')
+m = playground11
+x5 = m.predict(symbol='WRN')
+plt.plot(x5.obs, x5.pred, '.')
+print(x5.r2.round(2).item(), x5.r2_rand.round(2).item())
 
-(m.crispr_cnv_fit.r2[1:,:]>2).sum(axis=0).to_series().sort_values().pipe(lambda x: x[x>0])['TP53 (7157)']
 
 
 m = playground11
-x5 = 'TP53 (7157)'
-x1 = m.crispr_cnv_fit.cnv_r2.loc[1:,x5].to_series().pipe(lambda x: x[x>2]).index
-x1 = [0] + list(x1)
-x1 = [x.u[:,:int(m.dm_cnv_fft_svd_pc[int(i)].item())] for i, x in m.dm_cnv_fft_svd.items() if i in x1]
-x6 = m.dm_expr.data
-x6 = x6 - x1[0] @ (x1[0].T @ x6)
-x6 = gdf.SVD.from_mat(x6).u[:,:300].persist()
-x1 = x1 + [x6]
-x1 = [x.assign_coords(pc=([str(i)+':'+x for x in x.pc.values.astype(str)])) for i, x in enumerate(x1)]
-x1 = xa.concat(x1, 'pc').rename({'pc': 'cols'})
-x1 = gdf.SVD.from_mat(x1).persist()
-x2 = m.crispr.data.loc[:,x5].compute()
-x3 = x1.u
-x3 = (x3 @ (x3.T @ x2)).compute()
-plt.plot(x2, x3, '.')
-print((1-(x2-x3)**2).mean().values.round(2), np.array(x1.u.shape[1]/x1.u.shape[0]).round(2))
-
-
 plt.figure()
 plt.gca().plot(m.crispr_cnv_fit.r2[0,:], m.crispr_expr_fit.r2, '.')
 
