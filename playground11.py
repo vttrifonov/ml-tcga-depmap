@@ -16,6 +16,7 @@ import importlib
 import dask_ml.preprocessing as dmlp
 import plotly.express as px
 import dask
+from helpers import config
 
 import depmap_gdc_fit
 importlib.reload(depmap_gdc_fit)
@@ -24,6 +25,8 @@ import depmap_gdc_fit as gdf
 pd.set_option('display.max_rows', 500)
 pd.set_option('display.max_columns', 500)
 pd.set_option('display.width', 1000)
+
+config.exec()
 
 def smooth(x, window_len=11, window='hanning'):
     if len(x) < window_len:
@@ -159,198 +162,213 @@ def _smooth1(d1, frac, g, cols):
     f['smooth_resid'] = d1 - d
     return f
 
-m = gdf.merge()._merge
+def plot_fft_resid(x1):
+    px.scatter(
+        (x1.fft_resid ** 2).mean(axis=0).rename('mean'). \
+            assign_coords(arm=x1.arm, cyto=x1.cyto). \
+            to_dataframe().reset_index().reset_index(). \
+            query('mean>=0')
+        ,
+        x='index', y='mean', color='arm',
+        hover_data=['cyto', 'cols']
+    ).show()
 
-d = m.dm_cnv.copy()
-d['txMid'] = (d.txStart+d.txEnd)/2
-d = d.sortby(['chrom', 'txMid'])
-m.dm_cnv = d
-
-d = m.gdc_cnv.copy()
-d['txMid'] = (d.txStart+d.txEnd)/2
-d.data.data = d.data.data.rechunk((None, -1))
-with dask.config.set(**{'array.slicing.split_large_chunks': False}):
-    d = d.sortby(['chrom', 'txMid'])
-m.gdc_cnv = d
-
-d = _fft1(m.dm_cnv.data.assign_coords(arm=m.dm_cnv.arm), 10, 'arm', 'cols')
-d = d.drop('arm')
-m.dm_cnv = m.dm_cnv.merge(d)
-
-d = _fft1(m.gdc_cnv.data.assign_coords(arm=m.gdc_cnv.arm), 10, 'arm', 'cols')
-d = d.drop('arm')
-m.gdc_cnv = m.gdc_cnv.merge(d)
-
-
-x1 = (m.dm_cnv.fft_resid**2).mean(axis=0)
-x2 = (m.gdc_cnv.fft_resid**2).mean(axis=0)
-x3 = xa.merge([x1.rename('dm'), x2.rename('gdc')])
-x3['arm'] = m.dm_cnv.arm
-x3 = x3.to_dataframe().reset_index()
-
-x1 = m.dm_cnv.fft_resid.data
-x1 = x1/daa.sqrt((x1**2).sum(axis=0, keepdims=True))
-x1 = x1[:,1:] * x1[:,:-1]
-x1 = x1.sum(axis=0)
-x1 = x1.compute()
-x3['dm_cor'] = np.hstack([x1, [0]])
-
-x1 = m.gdc_cnv.fft_resid.data
-x1 = x1/daa.sqrt((x1**2).sum(axis=0, keepdims=True))
-x1 = x1[:,1:] * x1[:,:-1]
-x1 = x1.sum(axis=0)
-x1 = x1.compute()
-x3['gdc_cor'] = np.hstack([x1, [0]])
-
-x1 = x3.arm.to_numpy()
-x1 = np.hstack([True, x1[1:] != x1[:-1]])
-x2 = np.hstack([True, (x3.dm_cor<0.3)[:-1]])
-x3['g1'] = np.cumsum(x1 | x2)
-
-x3['dm_n'] = x3.groupby('g1').dm.transform(lambda x: sum(x>0.1))
-x3['gdc_n'] = x3.groupby('g1').gdc.transform(lambda x: sum(x>0.1))
-x3['t'] = (x3.gdc>0.1) & (x3.dm>0.1)
-x3['both_n'] = x3.groupby('g1').t.transform(lambda x: sum(x>0.1))
-
-x4 = x3.query('both_n>0').copy()
-x4['g2'] = x4.g1.astype('category').cat.codes+1
-#x = list(x4.groupby('g2'))[0][1]
-x4 = x4.groupby('g2').apply(lambda x: x.loc[x.index[x.t][0]:(x.index[x.t][-1]),:])
-m.dm_cnv['fft_group'] = x4.set_index('cols').g2.astype(int)
-
-x4.query('g2==28 & t==True')
-
-np.corrcoef(x3.dm, x3.gdc)
-x3['g1'] = x3.g.astype(str)
-px.scatter(
-    x3,
-    x='dm', y='gdc', color='g1',
-    hover_data=['cols']
-).show()
-
-
-
-m.dm_cnv_fft_svd = _svd1(m.dm_cnv, 10, 'cols')
-m.dm_cnv_fft_svd_rand = _svd1(m.dm_cnv, 10, 'cols', True)
-
-
-
-#m.gdc_cnv_fft_svd = _svd1(m.gdc_cnv, 10, 'cols')
-
-x1 = [x.u[:, :1].data for x in m.dm_cnv_fft_svd.values()]
-x1 = daa.hstack(x1)
-#x1 = daa.apply_along_axis(np.random.permutation, 0, x1, shape=(x1.shape[0],))
-x1 = x1.compute()
-x1 = x1.T @ x1
-x3 = x1[np.triu_indices(x1.shape[0], 1)]
-#plt.plot(sorted(x2), sorted(x3), '.')
-#plt.gca().axline((0,0), slope=1)
-
-plt.imshow(((x1-np.diag(np.diag(x1)))), aspect='auto', cmap=plt.get_cmap('bwr'))
-
-plt.hist(x3, 100)
-
-x1 = [x.ve.data for x in m.dm_cnv_fft_svd.values()]
-x1 = daa.hstack(x1)
-x1 = x1.compute()
-x4 = [x.ve.data for x in m.dm_cnv_fft_svd_rand.values()]
-x4 = daa.hstack(x4)
-x4 = x4.compute()
-x2 = pd.DataFrame(dict(
-    fft_group_pc = np.hstack([np.repeat(i, x.s.shape[0]) for i, x in m.dm_cnv_fft_svd.items()]).astype(int),
-    pc = np.hstack([np.arange(x.s.shape[0]) for _, x in m.dm_cnv_fft_svd.items()]).astype(int),
-    n = np.hstack([np.repeat(x.s.shape[0], x.s.shape[0]) for _, x in m.dm_cnv_fft_svd.items()]),
-    ve = x1,
-    ve_rand = x4
-))
-#x3 = x2.query('n>20 & pc==20')
-#plt.plot(x3.n, x3.ve, '.')
-#plt.plot(x3.n, x3.ve_rand, '.')
-x2 = x2.query('n==1 | ve_rand-ve>=1e-4').groupby('fft_group_pc').first()
-m.dm_cnv['fft_svd_pc'] = x2.pc+1
-
-
-x1 = m.dm_cnv_fft_svd[0].ve.values
-x2 = m.dm_cnv_fft_svd_rand[0].ve.values
-plt.hist(np.sqrt(x1), 50)
-plt.hist(np.sqrt(x2), 50)
-plt.plot(x1, x2, '.')
-plt.gca().axline((0,0), slope=1)
-
-
-#expr_cyto = gdf.SVD.from_mat(m.expr.cyto_dummy).persist()
-
-#x1 = m.dm_cnv.data.T
-#x2 = gdf.SVD.from_mat(m.dm_cnv.cyto_dummy).persist()
-#m.dm_cnv['cyto_coef'] = x2.inv(0).rmult(x1).usv.T.persist()
-#m.dm_cnv['cyto_predict'] = ((x1.T @ x2.u) @ x2.u.T).persist()
-#m.dm_cnv['cyto_resid'] = (x1.T-m.dm_cnv.cyto_predict).persist()
-
-#d = _smooth1(m.dm_cnv.data.assign_coords(arm=m.dm_cnv.arm), 0.1, 'arm', 'cols')
-#d = d.drop('arm')
-#m.dm_cnv = m.dm_cnv.merge(d)
-
-x1 = m.gdc_cnv
-px.scatter(
-    (x1.fft_resid**2).mean(axis=0).rename('mean').\
-        assign_coords(arm=x1.arm, cyto=x1.cyto).\
-        to_dataframe().reset_index().reset_index().\
-        query('mean>=0')
-    ,
-    x='index', y='mean', color='arm',
-    hover_data=['cyto', 'cols']
-).show()
-
-x1 = m.gdc_cnv
-px.scatter(
-    x1.rfft[0,:].\
-        assign_coords(
-            data=x1.data[0,:],
+def plot_fft(x1):
+    px.scatter(
+        x1.rfft[0, :]. \
+            assign_coords(
+            data=x1.data[0, :],
             arm=x1.arm, cyto=x1.cyto
-        ).\
-        to_dataframe().reset_index().reset_index(),
-    x='index', y=['rfft', 'data'], color='arm',
-    hover_data=['cyto', 'cols']
-).show()
+        ). \
+            to_dataframe().reset_index().reset_index(),
+        x='index', y=['rfft', 'data'], color='arm',
+        hover_data=['cyto', 'cols']
+    ).show()
 
+class _playground11:
+    @lazy_property
+    def m(self):
+        return gdf.merge()._merge
+playground11 = _playground11()
 
-s = '.cache/merge/crispr/fft_cnv'
-x1 = m.crispr.data.sel(rows=m.dm_cnv.rows.values).data.rechunk((-1, 1000)).to_zarr(s+'/mat')
-x1 = daa.from_zarr(s+'/mat')
-x2 = [x.u[:,:int(m.dm_cnv.fft_svd_pc[int(i)].item())].data for i, x in m.dm_cnv_fft_svd.items()]
-x2 = [((x1 - x @ (x.T @ x1))**2).mean(axis=0) for x in x2]
-x2 = daa.stack(x2).persist()
-x2 = x2.rechunk((-1, None))
-x4 = [x.perm.u[:,:int(m.dm_cnv.fft_svd_pc[int(i)].item())].data for i, x in m.dm_cnv_fft_svd.items()]
-x4 = [((x1 - x @ (x.T @ x1))**2).mean(axis=0) for x in x4]
-x4 = daa.stack(x4).persist()
-x4 = x4.rechunk((-1, None))
-x2.to_zarr(s+'/obs')
-x4.to_zarr(s+'/rand')
+def _():
+    _playground11.storage = config.cache/'playground11'
+    _playground11.crispr = property(lambda self: self.m.crispr)
+    _playground11.dm_expr = property(lambda self: self.m.dm_expr)
 
-x2 = daa.from_zarr(s+'/obs')
-x4 = daa.from_zarr(s+'/rand')
+    def _dm_cnv(self):
+        m = self.m
+        d = m.dm_cnv.copy()
+        d['txMid'] = (d.txStart+d.txEnd)/2
+        d = d.sortby(['chrom', 'txMid'])
+        return d
+    _playground11.dm_cnv = lazy_property(_dm_cnv)
+    #del self.__lazy___dm_cnv
 
-x5 = dmlp.StandardScaler().fit(daa.log10(1-x4+1e-5).T)
-x6 = x5.transform(daa.log10(1-x2+1e-5).T).T.persist()
-#m.crispr = m.crispr.drop(['fft_group', 'cnv_rand_mean', 'cnv_rand_var', 'cnv_r2'])
-m.crispr['cnv_rand_mean'] = ('fft_group', x5.mean_)
-m.crispr['cnv_rand_var'] = ('fft_group', x5.var_)
-m.crispr['cnv_r2'] = (('fft_group', 'cols'), x6)
-m.crispr['fft_group'] = ('fft_group', np.arange(x2.shape[0]))
+    def _gdc_cnv(self):
+        m = self.m
+        d = m.gdc_cnv.copy()
+        d['txMid'] = (d.txStart + d.txEnd) / 2
+        d.data.data = d.data.data.rechunk((None, -1))
+        with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+            d = d.sortby(['chrom', 'txMid'])
+        return d
+    _playground11.gdc_cnv = lazy_property(_gdc_cnv)
+    #del self.__lazy___gdc_cnv
 
-(m.crispr.cnv_r2[1:,:]>3).sum(axis=1).to_series().sort_values()
+    def _dm_cnv_fft(self):
+        d = _fft1(self.dm_cnv.data.assign_coords(arm=self.dm_cnv.arm), 10, 'arm', 'cols')
+        d = d.drop('arm')
+        return d
+    _playground11.dm_cnv_fft = lazy_property(_dm_cnv_fft)
+    #del self.__lazy___dm_cnv_fft
 
-m.crispr.cnv_r2[28,:].to_series().pipe(lambda x: x[x>3]).sort_values()
+    def _gdc_cnv_fft(self):
+        d = _fft1(self.gdc_cnv.data.assign_coords(arm=self.gdc_cnv.arm), 10, 'arm', 'cols')
+        d = d.drop('arm')
+        return d
+    _playground11.gdc_cnv_fft = lazy_property(_gdc_cnv_fft)
+    #del self.__lazy___gdc_cnv_fft
+
+    def _dm_cnv_fft_group(self):
+        x1 = (self.dm_cnv_fft.fft_resid**2).mean(axis=0)
+        x2 = (self.gdc_cnv_fft.fft_resid**2).mean(axis=0)
+        x3 = xa.merge([x1.rename('dm'), x2.rename('gdc')])
+        x3['arm'] = self.dm_cnv.arm
+        x3 = x3.to_dataframe().reset_index()
+
+        x1 = self.dm_cnv_fft.fft_resid.data
+        x1 = x1/daa.sqrt((x1**2).sum(axis=0, keepdims=True))
+        x1 = x1[:,1:] * x1[:,:-1]
+        x1 = x1.sum(axis=0)
+        x1 = x1.compute()
+        x3['dm_cor'] = np.hstack([x1, [0]])
+
+        x1 = self.gdc_cnv_fft.fft_resid.data
+        x1 = x1/daa.sqrt((x1**2).sum(axis=0, keepdims=True))
+        x1 = x1[:,1:] * x1[:,:-1]
+        x1 = x1.sum(axis=0)
+        x1 = x1.compute()
+        x3['gdc_cor'] = np.hstack([x1, [0]])
+
+        x1 = x3.arm.to_numpy()
+        x1 = np.hstack([True, x1[1:] != x1[:-1]])
+        x2 = np.hstack([True, (x3.dm_cor<0.3)[:-1]])
+        x3['g1'] = np.cumsum(x1 | x2)
+
+        x3['dm_n'] = x3.groupby('g1').dm.transform(lambda x: sum(x>0.1))
+        x3['gdc_n'] = x3.groupby('g1').gdc.transform(lambda x: sum(x>0.1))
+        x3['t'] = (x3.gdc>0.1) & (x3.dm>0.1)
+        x3['both_n'] = x3.groupby('g1').t.transform(lambda x: sum(x>0.1))
+
+        x4 = x3.query('both_n>0').copy()
+        x4['g2'] = x4.g1.astype('category').cat.codes+1
+        x4 = x4.groupby('g2').apply(lambda x: x.loc[x.index[x.t][0]:(x.index[x.t][-1]),:])
+
+        return x4.set_index('cols').g2.astype(int)
+
+        x4.query('g2==28 & t==True')
+
+        np.corrcoef(x3.dm, x3.gdc)
+        x3['g1'] = x3.g.astype(str)
+        px.scatter(
+            x3,
+            x='dm', y='gdc', color='g1',
+            hover_data=['cols']
+        ).show()
+    _playground11.dm_cnv_fft_group = lazy_property(_dm_cnv_fft_group)
+    #del self.__lazy___dm_cnv_fft_group
+
+    def _dm_cnv_fft_svd(self):
+        fft = self.dm_cnv_fft
+        fft['fft_group'] = self.dm_cnv_fft_group
+        return _svd1(fft, 10, 'cols')
+    _playground11.dm_cnv_fft_svd = lazy_property(_dm_cnv_fft_svd)
+    # del self.__lazy___dm_cnv_fft_svd
+
+    def _dm_cnv_fft_svd_rand(self):
+        fft = self.dm_cnv_fft
+        fft['fft_group'] = self.dm_cnv_fft_group
+        return _svd1(fft, 10, 'cols', True)
+    _playground11.dm_cnv_fft_svd_rand = lazy_property(_dm_cnv_fft_svd_rand)
+    # del self.__lazy___dm_cnv_fft_svd_rand
+
+    def _dm_cnv_fft_svd_pc(self):
+        m = self
+        x1 = [x.ve.data for x in m.dm_cnv_fft_svd.values()]
+        x1 = daa.hstack(x1)
+        x1 = x1.compute()
+        x4 = [x.ve.data for x in m.dm_cnv_fft_svd_rand.values()]
+        x4 = daa.hstack(x4)
+        x4 = x4.compute()
+        x2 = pd.DataFrame(dict(
+            fft_group_pc = np.hstack([np.repeat(i, x.s.shape[0]) for i, x in m.dm_cnv_fft_svd.items()]).astype(int),
+            pc = np.hstack([np.arange(x.s.shape[0]) for _, x in m.dm_cnv_fft_svd.items()]).astype(int),
+            n = np.hstack([np.repeat(x.s.shape[0], x.s.shape[0]) for _, x in m.dm_cnv_fft_svd.items()]),
+            ve = x1,
+            ve_rand = x4
+        ))
+        x2 = x2.query('n==1 | ve_rand-ve>=1e-4').groupby('fft_group_pc').first()
+        return x2.pc+1
+    _playground11.dm_cnv_fft_svd_pc = lazy_property(_dm_cnv_fft_svd_pc)
+    # del self.__lazy___dm_cnv_fft_svd_pc
+
+    def _crispr_cnv_fit(self):
+        s = self.storage/'crispr'/'cnv_fit'
+        if not s.exists():
+            x1 = self.crispr.data.sel(rows=self.dm_cnv.rows.values).data.rechunk((-1, 1000)).to_zarr(str(s/'mat'))
+            x1 = daa.from_zarr(str(s/'mat'))
+            x2 = [x.u[:,:int(self.dm_cnv_fft_svd_pc[int(i)].item())].data for i, x in self.dm_cnv_fft_svd.items()]
+            x2 = [((x1 - x @ (x.T @ x1))**2).mean(axis=0) for x in x2]
+            x2 = daa.stack(x2).persist()
+            x2 = x2.rechunk((-1, None))
+            x4 = [x.perm.u[:,:int(self.dm_cnv_fft_svd_pc[int(i)].item())].data for i, x in self.dm_cnv_fft_svd.items()]
+            x4 = [((x1 - x @ (x.T @ x1))**2).mean(axis=0) for x in x4]
+            x4 = daa.stack(x4).persist()
+            x4 = x4.rechunk((-1, None))
+            x2.to_zarr(str(s/'obs'))
+            x4.to_zarr(str(s/'rand'))
+
+        x2 = daa.from_zarr(str(s/'obs'))
+        x4 = daa.from_zarr(str(s/'rand'))
+
+        x5 = dmlp.StandardScaler().fit(daa.log10(1-x4+1e-5).T)
+        x6 = x5.transform(daa.log10(1-x2+1e-5).T).T.persist()
+        #m.crispr = m.crispr.drop(['fft_group', 'cnv_rand_mean', 'cnv_rand_var', 'cnv_r2'])
+        m = xa.Dataset()
+        m['fft_group'] = ('fft_group', np.arange(x2.shape[0]))
+        m['cols'] = self.crispr.cols
+        m['rand_mean'] = ('fft_group', x5.mean_)
+        m['rand_var'] = ('fft_group', x5.var_)
+        m['r2'] = (('fft_group', 'cols'), x6)
+        return m
+    _playground11.crispr_cnv_fit = lazy_property(_crispr_cnv_fit)
+    # del self.__lazy___crispr_cnv_fit
+
+    def _crispr_expr_fit(self):
+        return _fit(self.crispr.data, self.dm_expr.data, 400)
+    _playground11.crispr_expr_fit = lazy_property(_crispr_expr_fit)
+    # del self.__lazy___crispr_expr_fit
+_()
+
+plot_fft_resid(playground11.dm_cnv.merge(playground11.dm_cnv_fft))
+plot_fft(playground11.dm_cnv.merge(playground11.dm_cnv_fft))
+
+m = playground11
+(m.crispr_cnv_fit.r2[1:,:]>3).sum(axis=1).to_series().sort_values()
+
+m.crispr_cnv_fit.r2[28,:].to_series().pipe(lambda x: x[x>3]).sort_values()
 
 m.crispr.cols.sel(cols=m.crispr.symbol=='TP53')
 
-(m.crispr.cnv_r2[1:,:]>2).sum(axis=0).to_series().sort_values().pipe(lambda x: x[x>0])['TP53 (7157)']
+(m.crispr_cnv_fit.r2[1:,:]>2).sum(axis=0).to_series().sort_values().pipe(lambda x: x[x>0])['TP53 (7157)']
 
+
+m = playground11
 x5 = 'TP53 (7157)'
-x1 = m.crispr.cnv_r2.loc[1:,x5].to_series().pipe(lambda x: x[x>2]).index
+x1 = m.crispr_cnv_fit.cnv_r2.loc[1:,x5].to_series().pipe(lambda x: x[x>2]).index
 x1 = [0] + list(x1)
-x1 = [x.u[:,:int(m.dm_cnv.fft_svd_pc[int(i)].item())] for i, x in m.dm_cnv_fft_svd.items() if i in x1]
+x1 = [x.u[:,:int(m.dm_cnv_fft_svd_pc[int(i)].item())] for i, x in m.dm_cnv_fft_svd.items() if i in x1]
 x6 = m.dm_expr.data
 x6 = x6 - x1[0] @ (x1[0].T @ x6)
 x6 = gdf.SVD.from_mat(x6).u[:,:300].persist()
@@ -365,74 +383,23 @@ plt.plot(x2, x3, '.')
 print((1-(x2-x3)**2).mean().values.round(2), np.array(x1.u.shape[1]/x1.u.shape[0]).round(2))
 
 
-x5 = _fit(m.crispr.data, m.dm_expr.data, 400)
-m.crispr = m.crispr.merge(x5.rename({'rand_mean': 'expr_rand_mean', 'rand_var': 'expr_rand_var', 'r2': 'expr_r2'}))
+plt.figure()
+plt.gca().plot(m.crispr_cnv_fit.r2[0,:], m.crispr_expr_fit.r2, '.')
 
 plt.figure()
-plt.gca().plot(m.crispr.cnv_r2[0,:], m.crispr.expr_r2, '.')
+plt.gca().plot(m.crispr_cnv_fit.r2[0,:], m.crispr_cnv_fit.r2[1:,:].max(axis=0), '.')
 
 plt.figure()
-plt.gca().plot(m.crispr.cnv_r2[0,:], m.crispr.cnv_r2[1:,:].max(axis=0), '.')
+plt.gca().plot(m.crispr_expr_fit.r2, m.crispr_cnv_fit.r2[1:,:].mean(axis=0), '.')
 
 plt.figure()
-plt.gca().plot(m.crispr.expr_r2, m.crispr.cnv_r2[1:,:].mean(axis=0), '.')
-
-plt.figure()
-plt.gca().plot(m.crispr.cnv_r2[0,:], m.crispr.cnv_r2[1,:], '.')
+plt.gca().plot(m.crispr_cnv_fit.r2[0,:], m.crispr_cnv_fit.r2[1,:], '.')
 
 pd.DataFrame(dict(
-    expr=(m.crispr.expr_r2 > 2).values,
-    cnv_glob = (m.crispr.cnv_r2[0,:]>2).values,
-    cnv_loc = ((m.crispr.cnv_r2[1:,:]>2).sum(axis=0)>2).valuesa
+    expr=(m.crispr_expr_fit.r2 > 2).values,
+    cnv_glob = (m.crispr_cnv_fit.r2[0,:]>2).values,
+    cnv_loc = ((m.crispr_cnv_fit.r2[1:,:]>2).sum(axis=0)>2).values
 )).value_counts().sort_index()#.reset_index().pivot(index='loc', columns='glob')
-
-
-x1 = [x.u[:,:m.dm_cnv.fft_svd_pc[int(i)].item()] for i, x in m.dm_cnv_fft_svd.items()][1:]
-x1 = [x.assign_coords(pc=([str(i)+':'+x for x in x.pc.values.astype(str)])) for i, x in enumerate(x1)]
-x1 = xa.concat(x1, 'pc')
-x1 = x1.persist()
-x1 = x1.rename({'pc': 'cols'})
-x3 = gdf.SVD.from_mat(x1).persist()
-x2 = _fit(m.crispr.data, x1, 600)
-plt.plot(m.crispr.cnv_r2[0,:], x2.r2.compute(), '.')
-pd.DataFrame(dict(
-    cnv_glob = (m.crispr.cnv_r2[0,:]>2).values,
-    x2 = (x2.r2>2).values
-)).value_counts().sort_index()
-
-#x1 = m.dm_cnv_fft_svd[0].u[:,:m.dm_cnv.fft_svd_pc[0].item()].persist()
-x1 = m.dm_cnv_fft_svd[0].u[:,:].persist()
-x2 = m.dm_expr.data
-x2 = x2 - x1 @ (x1.T @ x2)
-x2 = dmlp.StandardScaler().fit_transform(x2)
-x2 = x2.persist()
-x2 = gdf.SVD.from_mat(x2)
-x2 = x2.u[:,:400]
-x2 = x2.persist()
-x3 = [x.assign_coords(pc=([str(i)+':'+x for x in x.pc.values.astype(str)])) for i, x in enumerate([x2])]
-x3 = xa.concat(x3, 'pc')
-x3 = x3.rename(pc='cols')
-x4 = _fit(m.crispr.data, x3, x3.shape[1])
-plt.plot(m.crispr.cnv_r2[0,:], x4.r2.compute(), '.')
-plt.plot(m.crispr.expr_r2, x4.r2.compute(), '.')
-
-
-x1 = m.crispr.data
-x1 = gdf.SVD.from_mat(x1).persist()
-x2 = m.expr.data
-x2 = gdf.SVD.from_mat(x2).persist()
-x3 = x2.cut(np.s_[:795]).u.T.rename({'pc': 'pc1'}) @ x1.cut(np.s_[:795]).u
-x3 = x2.cut(np.s_[:794]).inv(0).vs.T.rename({'pc': 'pc1'}) @ x1.cut(np.s_[:794]).us.rename({'pc': 'pc2'})
-x3 = gdf.SVD.from_mat(x3).persist()
-x3 = x3.cut(np.s_[:400])
-x3.u = x2.v.rename({'pc': 'pc1'}) @ x3.u
-x3.v = x1.v.rename({'pc': 'pc2'}) @ x3.v
-x3 = x3.persist()
-x3 = x3.lmult(x2.usv).usv.persist()
-x3 = (x1.usv - x3).persist()
-print((x3 ** 2).mean().values)
-
-plt.plot(x3.s)
 
 
 
