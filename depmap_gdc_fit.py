@@ -108,11 +108,6 @@ class SVD:
         ve = ve / ve.sum()
         return ve.rename('ve')
 
-    def add_pc_prefix(self, prefix):
-        xa = self.xarray
-        xa = xa.assign_coords(pc=([prefix+':'+x for x in xa.pc.values.astype(str)]))
-        return gdf.SVD(xa.u, xa.s, xa.v)
-    #gdf.SVD.add_pc_prefix = add_pc_prefix
 
 def _perm(x):
     return x[np.random.permutation(x.shape[0]), :]
