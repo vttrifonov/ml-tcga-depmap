@@ -443,44 +443,55 @@ def _():
 
     @lazy_property
     def crispr_model(self):
-        x1 = (self.crispr_cnv_fit.r2[1:,:]>2).sum(axis=1).to_series()
-        x1 = x1.pipe(lambda x: x[x > 0])
-        x1 = [0] + list(x1.index)
-        x1 = {i: self.dm_cnv_fft_svd[i] for i in x1}
-        x1 = {i: x.cut(np.s_[:self.dm_cnv_fft_svd_pc[i].item()]) for i, x in x1.items()}
-        x1 = {i: x.inv(0) for i, x in x1.items()}
-        x1 = {i: xa.merge([x.us.rename('us'), x.v.rename('v')]) for i, x in x1.items()}
-        x1 = {i: x.persist() for i, x in x1.items()}
-        x1 = {i: x.assign_coords(pc=['cnv:'+str(i)+':'+str(pc) for pc in x.pc.values]) for i, x in x1.items()}
-        dm_cnv_fft_svd = x1
-
-        x1 = self.dm_expr_svd
-        x1 = x1.cut(np.s_[:self.dm_expr_svd_pc])
-        x1 = x1.inv(0)
-        x1 = xa.merge([x1.us.rename('us'), x1.v.rename('v')])
-        x1 = x1.drop(['mean', 'var'])
-        x1 = x1.persist()
-        x1 = x1.assign_coords(pc = ['expr:'+str(pc) for pc in x1.pc.values])
-        dm_expr_svd = x1
-
-        crispr = self.crispr.data.copy()
-        crispr = crispr.drop(['mean', 'var'])
-        crispr.data = crispr.data.persist()
-
-        def model(x5):
-            x1 = self.crispr_cnv_fit.r2.loc[1:, x5].to_series().pipe(lambda x: x[x > 2])
+        def _build():
+            x1 = (self.crispr_cnv_fit.r2[1:,:]>2).sum(axis=1).to_series()
+            x1 = x1.pipe(lambda x: x[x > 0])
             x1 = [0] + list(x1.index)
-            x1 = [x.v for i, x in dm_cnv_fft_svd.items() if i in x1]
-            x1 = x1 + [dm_expr_svd.v]
-            x1 = xa.concat(x1, 'pc')
-            x1 = SVD.from_mat(x1.rename(pc='cols'))
-            x1 = x1.inv(0).usv.rename(rows='_rows', cols='rows')
-            x1 = x1 @ crispr.loc[:, x5].rename(rows='_rows')
-            return x1
+            x1 = {i: self.dm_cnv_fft_svd[i] for i in x1}
+            x1 = {i: x.cut(np.s_[:self.dm_cnv_fft_svd_pc[i].item()]) for i, x in x1.items()}
+            x1 = {i: x.inv(0) for i, x in x1.items()}
+            x1 = {i: xa.merge([x.us.rename('us'), x.v.rename('v')]) for i, x in x1.items()}
+            x1 = {i: x.persist() for i, x in x1.items()}
+            x1 = {i: x.assign_coords(pc=['cnv:'+str(i)+':'+str(pc) for pc in x.pc.values]) for i, x in x1.items()}
+            x1 = {i: x.assign_coords(group=('pc', np.repeat('cnv:' + str(i), x.pc.shape[0]))) for i, x in x1.items()}
+            dm_cnv_fft_svd = x1
 
-        s = Path(self.storage.path) / 'crispr_model'
-        if not s.exists():
-            x1 = [(print(x), model(x))[1] for x in crispr.cols.values[:10]]
+            x1 = self.dm_expr_svd
+            x1 = x1.cut(np.s_[:self.dm_expr_svd_pc])
+            x1 = x1.inv(0)
+            x1 = xa.merge([x1.us.rename('us'), x1.v.rename('v')])
+            x1 = x1.drop(['mean', 'var'])
+            x1 = x1.persist()
+            x1 = x1.assign_coords(pc = ['expr:'+str(pc) for pc in x1.pc.values])
+            x1 = x1.assign_coords(group=('pc', np.repeat('expr' , x1.pc.shape[0])))
+            dm_expr_svd = x1
+
+            crispr = self.crispr.data.copy()
+            crispr = crispr.drop(['mean', 'var'])
+            crispr.data = crispr.data.persist()
+            crispr = crispr.rename(rows='_rows')
+
+            v = [x.v for i, x in dm_cnv_fft_svd.items()]
+            v = v + [dm_expr_svd.v]
+            v = xa.concat(v, 'pc')
+            v = v.rename(rows='_rows', pc='rows')
+
+            x1 = self.crispr_cnv_fit.r2[1:,:]
+            x1 = x1.drop(['mean', 'var'])
+            x1 = x1.rename(fft_group='group')
+            x1 = x1.assign_coords(group=('group', ['cnv:'+str(x) for x in x1.group.values]))
+            crispr_cnv_fit_r2 = x1>2
+
+            def model(x5):
+                x1 = crispr_cnv_fit_r2.loc[:,x5]
+                x1 = x1.sel(group=x1)
+                x1 = np.hstack([x1.group.values, ['cnv:0', 'expr']])
+                x1 = v.sel(rows=v.group.isin(x1))
+                x1 = SVD.from_mat(x1).inv(0).usv
+                x1 = x1 @ crispr.loc[:, x5]
+                return x1
+
+            x1 = [model(x) for x in crispr.cols.values]
 
             x2 = [set(x.rows.values) for x in x1]
             x2 = set().union(*x2)
@@ -500,41 +511,60 @@ def _():
                 x4,
                 shape=(len(x2), len(x3))
             )
-            x4 = x4.todense()
-            x4 = daa.from_array(x4).astype('float16')
+            x4 = x4.astype('float32')
             x4 = xa.DataArray(
-                x4,
+                daa.from_array(x4),
                 dims=('pc', 'cols'),
                 coords={
                     'pc': x2.index,
                     'cols': x3.index
                 }
             )
-            s.parent.mkdir(parents=True, exist_ok=True)
-            x4.rename('data').to_dataset().to_zarr(s/'v')
 
-            (s/'us').mkdir(parents=True, exist_ok=True)
-            for i, x in dm_cnv_fft_svd.items():
-                si = 'cnv:' + str(i)
-                print(si)
-                x7 = x.us.drop('fft_group')
-                x7 = x7.rename(cols='rows')
-                x7['rows'] = x7.rows.astype(str)
-                x7 = x7.astype('float16').rename('data').to_dataset()
-                x7.to_zarr(s/'us'/si)
+            x7 = {
+                'cnv:' + str(i): x.us.drop('fft_group').rename(cols='rows')
+                for i, x in dm_cnv_fft_svd.items()
+            }
+            x7['expr'] = dm_expr_svd.us.rename(cols='rows')
 
-            x7 = dm_expr_svd.us
-            x7 = x7.rename(cols='rows')
-            x7['rows'] = x7.rows.astype(str)
-            x7 = x7.astype('float16').rename('data').to_dataset()
-            x7.to_zarr(s/'us'/'expr')
+            x8 = SimpleNamespace()
+            x8.u = x4
+            x8.vs = x7
+            x8.crispr_stats = self.crispr[['mean', 'var']].reset_coords(['mean', 'var'])
+            x8.expr_stats = self.dm_expr[['mean', 'var']].reset_coords(['mean', 'var'])
+            x8.cnv_stats = self.dm_cnv[['mean', 'var', 'chrom', 'txMid']].reset_coords(['mean', 'var'])
+            return x8
+
+        s = Path(self.storage.path)/'crispr_model'
+        if not s.exists():
+            x8 = _build()
+            x1 = x8.u.astype('float16')
+            x1.data = daa.from_array(x1.data.compute().todense())
+            x1.rename('data').to_dataset().to_zarr(s/'u')
+            for i, x in x8.vs.items():
+                x1 = x.astype('float16')
+                x1['rows'] = x1.rows.astype(str)
+                x1.rename('data').to_dataset().to_zarr(s / 'vs' /i)
+            x8.crispr_stats.to_zarr(s/'crispr_stats')
+            x8.expr_stats.to_zarr(s / 'expr_stats')
+            x8.cnv_stats.to_zarr(s / 'cnv_stats')
 
         x8 = SimpleNamespace()
-        x8.u = xa.open_zarr(s/'v').data
-        x8.vs = {i.name: xa.open_zarr(s/'us'/i).data for i in (s/'us').glob('*')}
+        x8.u = xa.open_zarr(s/'u').data.astype('float32').rename('u')
+        x8.vs = {
+            i.name: xa.open_zarr(i).astype('float32').data.rename(i.name)
+            for i in (s/'vs').glob('*')
+        }
+        x8.crispr_stats = xa.open_zarr(s/'crispr_stats')
+        x8.expr_stats = xa.open_zarr(s / 'expr_stats')
+        x8.cnv_stats = xa.open_zarr(s / 'cnv_stats')
         return x8
     _playground11.crispr_model = crispr_model
     # del self.__lazy__crispr_model
+
+    def crispr_predict(self, expr, cnv):
+        model = self.crispr_model
+    _playground11.predict = predict
 
     def predict(self, col = None, symbol = None, entrez = None):
         if col is None:
@@ -574,6 +604,9 @@ _()
 
 self = playground11
 self.dm_cnv_fft_svd_pc
+
+expr = merge.dm_expr.copy()
+cnv = merge.dm_cnv.copy()
 
 m = playground11
 plot_fft_resid(m.dm_cnv.merge(m.dm_cnv_fft).drop('mean'))
