@@ -116,9 +116,10 @@ def _svd1(d, cutoff, cols, rand = False):
     x3 = x3.sel({cols: ~x3.fft_group.isnull()})
     x4 = d.fft.sel(freq=d.fft.fft_freq<cutoff)
     x4 = x4.rename({'freq': 'cols'}).drop(['fft_arm', 'fft_freq'])
-    x4['fft_group'] = ('cols', np.zeros(x4.shape[1], dtype=int))
+    x4['fft_group'] = ('cols', np.zeros(x4.shape[1]))
     x3 = xa.concat([x3, x4], 'cols')
     x3 = dmlp.StandardScaler().fit_transform(x3)
+    x3['fft_group'] = x3.fft_group.astype('int')
     if rand:
         x3.data = daa.apply_along_axis(np.random.permutation, 0, x3.data, shape=(x3.shape[0],), dtype=x3.dtype)
     x3 = x3.groupby('fft_group')
@@ -159,6 +160,13 @@ def _smooth1(d1, frac, g, cols):
     f['smooth_resid'] = d1 - d
     return f
 
+def _scale(d):
+    fit = dmlp.StandardScaler().fit(d)
+    d['mean'] = (d.dims[1], fit.mean_)
+    d['var'] = (d.dims[1], fit.var_)
+    d = fit.transform(d)
+    return d
+
 def plot_fft_resid(x1):
     px.scatter(
         (x1.fft_resid ** 2).mean(axis=0).rename('mean'). \
@@ -187,14 +195,29 @@ class _playground11:
 playground11 = _playground11()
 
 def _():
-    _playground11.storage = config.cache/'playground11'
-    _playground11.crispr = property(lambda self: merge.crispr)
-    _playground11.dm_expr = property(lambda self: merge.dm_expr)
+    _playground11.storage = Dir(config.cache/'playground11')
+
+    @lazy_property
+    def crispr(self):
+        d = merge.crispr.copy()
+        d['data'] = _scale(d.data.astype('float32'))
+        return d
+    _playground11.crispr = crispr
+    #del self.__lazy__crispr
+
+    @lazy_property
+    def dm_expr(self):
+        d = merge.dm_expr.copy()
+        d['data'] = _scale(d.data.astype('float32'))
+        return d
+    _playground11.dm_expr = dm_expr
+    #del self.__lazy__dm_expr
 
     @lazy_property
     def dm_cnv(self):
         d = merge.dm_cnv.copy()
         d['txMid'] = (d.txStart+d.txEnd)/2
+        d['data'] = _scale(d.data.astype('float32'))
         d = d.sortby(['chrom', 'txMid'])
         return d
     _playground11.dm_cnv = dm_cnv
@@ -205,6 +228,7 @@ def _():
         d = merge.gdc_cnv.copy()
         d['txMid'] = (d.txStart + d.txEnd) / 2
         d.data.data = d.data.data.rechunk((None, -1))
+        d['data'] = _scale(d.data.astype('float32'))
         with dask.config.set(**{'array.slicing.split_large_chunks': False}):
             d = d.sortby(['chrom', 'txMid'])
         return d
@@ -213,7 +237,9 @@ def _():
 
     @lazy_property
     def dm_cnv_fft(self):
-        d = _fft1(self.dm_cnv.data.assign_coords(arm=self.dm_cnv.arm), 10, 'arm', 'cols')
+        d = self.dm_cnv.data.assign_coords(arm=self.dm_cnv.arm)
+        d = d.drop(['mean', 'var'])
+        d = _fft1(d, 10, 'arm', 'cols')
         d = d.drop('arm')
         return d
     _playground11.dm_cnv_fft = dm_cnv_fft
@@ -221,13 +247,16 @@ def _():
 
     @lazy_property
     def gdc_cnv_fft(self):
-        d = _fft1(self.gdc_cnv.data.assign_coords(arm=self.gdc_cnv.arm), 10, 'arm', 'cols')
+        d = self.gdc_cnv.data.assign_coords(arm=self.gdc_cnv.arm)
+        d = d.drop(['mean', 'var'])
+        d = _fft1(d, 10, 'arm', 'cols')
         d = d.drop('arm')
         return d
     _playground11.gdc_cnv_fft = gdc_cnv_fft
     #del self.__lazy__gdc_cnv_fft
 
     @lazy_property
+    @cached_property(type=Dir.pickle)
     def dm_cnv_fft_group(self):
         x1 = (self.dm_cnv_fft.fft_resid**2).mean(axis=0)
         x2 = (self.gdc_cnv_fft.fft_resid**2).mean(axis=0)
@@ -279,9 +308,20 @@ def _():
 
     @lazy_property
     def dm_cnv_fft_svd(self):
-        fft = self.dm_cnv_fft
-        fft['fft_group'] = self.dm_cnv_fft_group
-        return _svd1(fft, 10, 'cols')
+        s = Path(self.storage.path)/'dm_cnv_fft_svd'
+        if not s.exists():
+            fft = self.dm_cnv_fft.copy()
+            fft['fft_group'] = self.dm_cnv_fft_group
+            fft.fft.data = fft.fft.data.persist()
+            fft.fft_resid.data = fft.fft_resid.data.persist()
+            svd = _svd1(fft, 10, 'cols')
+            for i, x in svd.items():
+                x.xarray.to_zarr(s/str(i))
+        svd = {
+            int(i.name):SVD.from_xarray(xa.open_zarr(s/i))
+            for i in s.glob('*')
+        }
+        return svd
     _playground11.dm_cnv_fft_svd = dm_cnv_fft_svd
     # del self.__lazy__dm_cnv_fft_svd
 
@@ -294,12 +334,15 @@ def _():
     # del self.__lazy__dm_cnv_fft_svd_rand
 
     @lazy_property
+    @cached_property(type=Dir.pickle)
     def dm_cnv_fft_svd_pc(self):
         m = self
-        x1 = [x.ve.data for x in m.dm_cnv_fft_svd.values()]
+        x1 = m.dm_cnv_fft_svd
+        x1 = [x.ve.data for x in x1.values()]
         x1 = daa.hstack(x1)
         x1 = x1.compute()
-        x4 = [x.ve.data for x in m.dm_cnv_fft_svd_rand.values()]
+        x4 = m.dm_cnv_fft_svd_rand
+        x4 = [x4[i].ve.data for i in m.dm_cnv_fft_svd.keys()]
         x4 = daa.hstack(x4)
         x4 = x4.compute()
         x2 = pd.DataFrame(dict(
@@ -320,27 +363,33 @@ def _():
         x1 = x1.u[:,:int(self.dm_cnv_fft_svd_pc[0].item())]
         x6 = self.dm_expr.data
         x6 = x6 - x1[0] @ (x1[0].T @ x6)
+        x6 = dmlp.StandardScaler().fit_transform(x6)
+        x6 = x6.persist()
         return x6
     _playground11.dm_expr1 = dm_expr1
 
     @lazy_property
     def dm_expr_svd(self):
-        x6 = self.dm_expr1
-        x6 = dmlp.StandardScaler().fit_transform(x6)
-        return SVD.from_mat(x6)
+        s = Path(self.storage.path)/'dm_expr_svd'
+        if not s.exists():
+            x6 = self.dm_expr1
+            svd = SVD.from_mat(x6)
+            svd.xarray.to_zarr(s)
+        svd = SVD.from_xarray(xa.open_zarr(s))
+        return svd
     _playground11.dm_expr_svd = dm_expr_svd
     # del self.__lazy__dm_expr_svd
 
     @lazy_property
     def dm_expr_svd_rand(self):
         x6 = self.dm_expr1
-        x6 = dmlp.StandardScaler().fit_transform(x6)
         x6.data = daa.apply_along_axis(np.random.permutation, 0, x6.data, shape=(x6.shape[0],), dtype=x6.dtype)
         return SVD.from_mat(x6)
     _playground11.dm_expr_svd_rand = dm_expr_svd_rand
     # del self.__lazy__dm_expr_svd_rand
 
     @lazy_property
+    @cached_property(type=Dir.pickle)
     def dm_expr_svd_pc(self):
         m = self
         x1 =  m.dm_expr_svd.ve.compute()
@@ -357,10 +406,9 @@ def _():
 
     @lazy_property
     def crispr_cnv_fit(self):
-        s = self.storage/'crispr'/'cnv_fit'
+        s = Path(self.storage.path)/'crispr_cnv_fit'
         if not s.exists():
-            x1 = self.crispr.data.sel(rows=self.dm_cnv.rows.values).data.rechunk((-1, 1000)).to_zarr(str(s/'mat'))
-            x1 = daa.from_zarr(str(s/'mat'))
+            x1 = self.crispr.data.sel(rows=self.dm_cnv.rows.values).data.persist()
             x2 = [x.u[:,:int(self.dm_cnv_fft_svd_pc[int(i)].item())].data for i, x in self.dm_cnv_fft_svd.items()]
             x2 = [((x1 - x @ (x.T @ x1))**2).mean(axis=0) for x in x2]
             x2 = daa.stack(x2).persist()
@@ -377,7 +425,6 @@ def _():
 
         x5 = dmlp.StandardScaler().fit(daa.log10(1-x4+1e-5).T)
         x6 = x5.transform(daa.log10(1-x2+1e-5).T).T.persist()
-        #m.crispr = m.crispr.drop(['fft_group', 'cnv_rand_mean', 'cnv_rand_var', 'cnv_r2'])
         m = xa.Dataset()
         m['fft_group'] = ('fft_group', np.arange(x2.shape[0]))
         m['cols'] = self.crispr.cols
@@ -396,34 +443,44 @@ def _():
 
     @lazy_property
     def crispr_model(self):
+        x1 = (self.crispr_cnv_fit.r2[1:,:]>2).sum(axis=1).to_series()
+        x1 = x1.pipe(lambda x: x[x > 0])
+        x1 = [0] + list(x1.index)
+        x1 = {i: self.dm_cnv_fft_svd[i] for i in x1}
+        x1 = {i: x.cut(np.s_[:self.dm_cnv_fft_svd_pc[i].item()]) for i, x in x1.items()}
+        x1 = {i: x.inv(0) for i, x in x1.items()}
+        x1 = {i: xa.merge([x.us.rename('us'), x.v.rename('v')]) for i, x in x1.items()}
+        x1 = {i: x.persist() for i, x in x1.items()}
+        x1 = {i: x.assign_coords(pc=['cnv:'+str(i)+':'+str(pc) for pc in x.pc.values]) for i, x in x1.items()}
+        dm_cnv_fft_svd = x1
+
+        x1 = self.dm_expr_svd
+        x1 = x1.cut(np.s_[:self.dm_expr_svd_pc])
+        x1 = x1.inv(0)
+        x1 = xa.merge([x1.us.rename('us'), x1.v.rename('v')])
+        x1 = x1.drop(['mean', 'var'])
+        x1 = x1.persist()
+        x1 = x1.assign_coords(pc = ['expr:'+str(pc) for pc in x1.pc.values])
+        dm_expr_svd = x1
+
+        crispr = self.crispr.data.copy()
+        crispr = crispr.drop(['mean', 'var'])
+        crispr.data = crispr.data.persist()
+
         def model(x5):
             x1 = self.crispr_cnv_fit.r2.loc[1:, x5].to_series().pipe(lambda x: x[x > 2])
             x1 = [0] + list(x1.index)
-            x1 = [
-                x.u[:,:int(self.dm_cnv_fft_svd_pc[int(i)].item())].rename(pc='cols')
-                for i, x in self.dm_cnv_fft_svd.items() if i in x1
-            ]
-            x1 = [
-                x.assign_coords(cols=['cnv:' + str(i) + ':' + str(s) for s in x.cols.values])
-                for i, x in enumerate(x1)
-            ]
-            x1 = [
-                x.assign_coords(group='cnv:' + str(i))
-                for i, x in enumerate(x1)
-            ]
-            x4 = self.dm_expr_svd.u[:,:self.dm_expr_svd_pc].rename(pc='cols')
-            x4 = x4.assign_coords(cols=['expr:' + str(s) for s in x4.cols.values])
-            x4 = x4.assign_coords(group='expr')
-            x1 = x1 + [x4]
-            x1 = xa.concat(x1, 'cols')
-            x1 = SVD.from_mat(x1)
+            x1 = [x.v for i, x in dm_cnv_fft_svd.items() if i in x1]
+            x1 = x1 + [dm_expr_svd.v]
+            x1 = xa.concat(x1, 'pc')
+            x1 = SVD.from_mat(x1.rename(pc='cols'))
             x1 = x1.inv(0).usv.rename(rows='_rows', cols='rows')
-            x1 = x1 @ self.crispr.data.loc[:, x5].rename(rows='_rows')
+            x1 = x1 @ crispr.loc[:, x5].rename(rows='_rows')
             return x1
 
-        s = self.storage / 'crispr' / 'model'
+        s = Path(self.storage.path) / 'crispr_model'
         if not s.exists():
-            x1 = [(print(x), model(x))[1] for x in self.crispr.cols.values[:10]]
+            x1 = [(print(x), model(x))[1] for x in crispr.cols.values[:10]]
 
             x2 = [set(x.rows.values) for x in x1]
             x2 = set().union(*x2)
@@ -447,40 +504,34 @@ def _():
             x4 = daa.from_array(x4).astype('float16')
             x4 = xa.DataArray(
                 x4,
-                dims=('lat', 'cols'),
+                dims=('pc', 'cols'),
                 coords={
-                    'lat': x2.index,
+                    'pc': x2.index,
                     'cols': x3.index
                 }
             )
             s.parent.mkdir(parents=True, exist_ok=True)
-            x4.rename('data').to_dataset().to_zarr(s/'u')
+            x4.rename('data').to_dataset().to_zarr(s/'v')
 
-            x6 = [set(x.group.values) for x in x1]
-            x6 = set().union(*x6)
-            (s/'vs').mkdir(parents=True, exist_ok=True)
-            for i, x in self.dm_cnv_fft_svd.items():
-                si = 'cnv:' + str(int(i))
-                if not si in x6:
-                    continue
+            (s/'us').mkdir(parents=True, exist_ok=True)
+            for i, x in dm_cnv_fft_svd.items():
+                si = 'cnv:' + str(i)
                 print(si)
-                x7 = x.cut(np.s_[:int(self.dm_cnv_fft_svd_pc[int(i)].item())])
-                x7 = x7.inv(0).us.drop('fft_group')
-                x7 = x7.rename(cols='rows', pc='lat')
-                x7 = x7.assign_coords(lat=[si + ':' + str(s) for s in x7.lat.values])
+                x7 = x.us.drop('fft_group')
+                x7 = x7.rename(cols='rows')
+                x7['rows'] = x7.rows.astype(str)
                 x7 = x7.astype('float16').rename('data').to_dataset()
-                x7.to_zarr(s/'vs'/si)
+                x7.to_zarr(s/'us'/si)
 
-            x7 = self.dm_expr_svd.cut(np.s_[:self.dm_expr_svd_pc])
-            x7 = x7.inv(0).us
-            x7 = x7.rename(cols='rows', pc='lat')
-            x7 = x7.assign_coords(lat=['expr:' + str(s) for s in x7.lat.values])
+            x7 = dm_expr_svd.us
+            x7 = x7.rename(cols='rows')
+            x7['rows'] = x7.rows.astype(str)
             x7 = x7.astype('float16').rename('data').to_dataset()
-            x7.to_zarr(s/'vs'/'expr')
+            x7.to_zarr(s/'us'/'expr')
 
         x8 = SimpleNamespace()
-        x8.u = xa.open_zarr(s/'u').data
-        x8.vs = {i.name: xa.open_zarr(s/'vs'/i).data for i in (s/'vs').glob('*')}
+        x8.u = xa.open_zarr(s/'v').data
+        x8.vs = {i.name: xa.open_zarr(s/'us'/i).data for i in (s/'us').glob('*')}
         return x8
     _playground11.crispr_model = crispr_model
     # del self.__lazy__crispr_model
@@ -521,10 +572,12 @@ def _():
     _playground11.predict = predict
 _()
 
-m = playground11
-plot_fft_resid(m.dm_cnv.merge(m.dm_cnv_fft))
-plot_fft(m.dm_cnv.merge(m.dm_cnv_fft))
+self = playground11
+self.dm_cnv_fft_svd_pc
 
+m = playground11
+plot_fft_resid(m.dm_cnv.merge(m.dm_cnv_fft).drop('mean'))
+plot_fft(m.dm_cnv.merge(m.dm_cnv_fft).drop('mean'))
 
 m = playground11
 (m.crispr_cnv_fit.r2[1:,:]>3).sum(axis=1).to_series().sort_values()
