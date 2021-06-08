@@ -198,8 +198,25 @@ def _():
     _playground11.storage = Dir(config.cache/'playground11'/'full')
 
     @lazy_property
+    @cached_property(type=Dir.pickle)
+    def train_split_ratio(self):
+        return 1
+    _playground11.train_split_ratio = train_split_ratio
+    #del self.__lazy__train_split_ratio
+
+    @lazy_property
+    @cached_property(type=Dir.pickle)
+    def train_split(self):
+        rows = merge.crispr.rows
+        rows['train'] = ('rows', np.random.random(rows.shape[0])<=self.train_split_ratio)
+        return rows
+    _playground11.train_split = train_split
+    #del self.__lazy__train_split
+
+    @lazy_property
     def crispr(self):
         d = merge.crispr.copy()
+        d = d.sel(rows=self.train_split.train)
         d['data'] = _scale(d.data.astype('float32'))
         return d
     _playground11.crispr = crispr
@@ -208,6 +225,7 @@ def _():
     @lazy_property
     def dm_expr(self):
         d = merge.dm_expr.copy()
+        d = d.sel(rows=self.train_split.train)
         d['data'] = _scale(d.data.astype('float32'))
         return d
     _playground11.dm_expr = dm_expr
@@ -216,6 +234,7 @@ def _():
     @lazy_property
     def dm_cnv(self):
         d = merge.dm_cnv.copy()
+        d = d.sel(rows=self.train_split.train)
         d['txMid'] = (d.txStart+d.txEnd)/2
         d['data'] = _scale(d.data.astype('float32'))
         d = d.sortby(['chrom', 'txMid'])
@@ -587,12 +606,14 @@ def _():
         expr = expr - model.expr_stats['mean']
         expr = expr/np.sqrt(model.expr_stats['var'])
         expr = expr.rename(rows='_rows', cols='rows')
+        expr.data = expr.data.rechunk((None, -1))
 
         cnv = cnv - model.cnv_stats['mean']
         cnv = cnv/np.sqrt(model.cnv_stats['var'])
         cnv = xa.merge([cnv.rename('data'), model.cnv_stats[['arm', 'chrom', 'txMid']]])
         cnv = cnv.sortby(['chrom', 'txMid'])
         cnv = cnv.rename(rows='_rows')
+        cnv.data.data = cnv.data.data.rechunk((None, -1))
 
         d = cnv.data.assign_coords(arm=cnv.arm)
         d = _fft1(d, 10, 'arm', 'cols')
@@ -612,6 +633,7 @@ def _():
         ]
         crispr = [expr_v, cnv_v_glob] + cnv_v_loc
         crispr = xa.concat(crispr, 'pc')
+        crispr.data = crispr.data.rechunk((None, -1))
         crispr = crispr @ model.u
         crispr = crispr.rename(_rows='rows')
         crispr = crispr * np.sqrt(model.crispr_stats['var'])
@@ -619,6 +641,83 @@ def _():
 
         return crispr
     _playground11.crispr_predict = crispr_predict
+
+    @lazy_property
+    def gdc_prediction(self):
+        s = Path(self.storage.path) / 'gdc_prediction'
+
+        if not s.exists():
+            expr = merge.gdc_expr.data.copy().astype('float32')
+            cnv = merge.gdc_cnv.data.copy().astype('float32')
+            crispr_predict = self.crispr_predict(expr, cnv)
+            crispr_predict = crispr_predict.astype('float16')
+            crispr_predict['rows'] = crispr_predict.rows.astype(str)
+            crispr_predict['cols'] = crispr_predict.cols.astype(str)
+            crispr_predict.data = crispr_predict.data.rechunk((1000, -1))
+            crispr_predict.rename('data').to_dataset().to_zarr(s)
+
+        crispr_predict = xa.open_zarr(s).data.astype('float32')
+        return crispr_predict
+    _playground11.gdc_prediction = gdc_prediction
+    # del self.__lazy__gdc_prediction
+
+    @lazy_property
+    def dm_prediction(self):
+        s = Path(self.storage.path) / 'dm_prediction'
+
+        if not s.exists():
+            expr = merge.dm_expr.data.copy().astype('float32')
+            cnv = merge.dm_cnv.data.copy().astype('float32')
+            crispr_predict = self.crispr_predict(expr, cnv)
+            crispr_predict = crispr_predict.astype('float16')
+            crispr_predict['rows'] = crispr_predict.rows.astype(str)
+            crispr_predict['cols'] = crispr_predict.cols.astype(str)
+            crispr_predict.data = crispr_predict.data.rechunk((1000, -1))
+            crispr_predict.rename('data').to_dataset().to_zarr(s)
+
+        crispr_predict = xa.open_zarr(s).data.astype('float32')
+        return crispr_predict
+    _playground11.dm_prediction = dm_prediction
+    # del self.__lazy__dm_prediction
+
+    @lazy_property
+    def crispr_model_score(self):
+        x1 = self.dm_prediction
+        x1 -= x1.mean(axis=0)
+        x1 /= np.sqrt((x1**2).sum(axis=0))
+
+        x2 = merge.crispr.data
+        x2 -= x2.mean(axis=0)
+        x2 /= np.sqrt((x2**2).sum(axis=0))
+
+        x3 = x1*x2
+        x3['train'] = self.train_split.train
+        x3 = x3.groupby('train').sum(dim='rows')
+        x3 = x3.to_dataframe().reset_index().pivot_table(index='cols', columns='train', values='data')
+
+        return x3
+    _playground11.crispr_model_score = crispr_model_score
+    # del self.__lazy__crispr_model_score
+
+    @lazy_property
+    def crispr_prediction(self):
+        x1 = self.dm_prediction.copy()
+        x1['row_label'] = merge.dm_expr.CCLE_Name
+        x1['source'] = ('rows', np.repeat('dm_prediction', x1.rows.shape[0]))
+
+        x2 = self.gdc_prediction.copy()
+        x2['row_label'] = merge.gdc_expr.project_id
+        x2['source'] = merge.gdc_expr.project_id
+
+        x3 = merge.crispr.data.copy().astype('float32')
+        x3['row_label'] = merge.dm_expr.CCLE_Name
+        x3['source'] = ('rows', np.repeat('dm_experiment', x3.rows.shape[0]))
+
+        crispr = xa.concat([x1, x2, x3], 'rows')
+        crispr = crispr.assign_coords(merge.crispr[['symbol', 'entrez']])
+        return crispr
+    _playground11.crispr_prediction = crispr_prediction
+    # del self.__lazy__crispr_prediction
 
     def predict(self, col = None, symbol = None, entrez = None):
         if col is None:
@@ -658,28 +757,18 @@ _()
 
 
 self = playground11
-expr = merge.dm_expr.data.copy().astype('float32')
-cnv = merge.dm_cnv.data.copy().astype('float32')
-crispr = merge.crispr.data.copy().astype('float32')
-crispr_predict = self.crispr_predict(expr, cnv).persist()
 
-self.crispr.cols.sel(cols=self.crispr.symbol=='WRN')
-plt.plot(crispr_predict.loc[:,'WRN (7486)'], crispr.loc[:,'WRN (7486)'], '.')
+self.crispr_model_score.sort_values(True).tail(20)
 
-x1 = crispr_predict
-x1 -= x1.mean(axis=0)
-x1 /= np.sqrt((x1**2).sum(axis=0))
+crispr = self.crispr_prediction
 
-x2 = crispr
-x2 -= x2.mean(axis=0)
-x2 /= np.sqrt((x2**2).sum(axis=0))
+px.scatter(
+    crispr.sel(cols=crispr.symbol=='TP63').squeeze().to_dataframe().sort_values('source'),
+    'source', 'data',
+    hover_data=['row_label']
+).show()
 
-x3 = (x1 * x2).sum(axis=0)
 
-x3 = x3.compute()
-
-plt.hist(x3, 100)
-plt.gca().axline((0.57, 0), (0.57, 100), color='red')
 
 
 self = playground11
