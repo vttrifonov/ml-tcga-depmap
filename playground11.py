@@ -118,7 +118,7 @@ def _svd1(d, cutoff, cols, rand = False):
     x4 = x4.rename({'freq': 'cols'}).drop(['fft_arm', 'fft_freq'])
     x4['fft_group'] = ('cols', np.zeros(x4.shape[1]))
     x3 = xa.concat([x3, x4], 'cols')
-    #x3 = dmlp.StandardScaler().fit_transform(x3)
+    x3 = dmlp.StandardScaler().fit_transform(x3)
     x3['fft_group'] = x3.fft_group.astype('int')
     if rand:
         x3.data = daa.apply_along_axis(np.random.permutation, 0, x3.data, shape=(x3.shape[0],), dtype=x3.dtype)
@@ -192,15 +192,23 @@ def plot_fft(x1):
 
 class _playground11:
     pass
-playground11 = _playground11()
 
 def _():
-    _playground11.storage = Dir(config.cache/'playground11'/'full')
+    def __init__(self, name, train_split_ratio):
+        self._train_split_ratio = train_split_ratio
+        self.name = name
+    _playground11.__init__ = __init__
+
+    @lazy_property
+    def storage(self):
+        return Dir(config.cache / 'playground11' / self.name)
+    _playground11.storage = storage
+    #del self.__lazy__storage
 
     @lazy_property
     @cached_property(type=Dir.pickle)
     def train_split_ratio(self):
-        return 1
+        return self._train_split_ratio
     _playground11.train_split_ratio = train_split_ratio
     #del self.__lazy__train_split_ratio
 
@@ -218,6 +226,7 @@ def _():
         d = merge.crispr.copy()
         d = d.sel(rows=self.train_split.train)
         d['data'] = _scale(d.data.astype('float32'))
+        d = d.reset_coords(['mean', 'var', 'train'])
         return d
     _playground11.crispr = crispr
     #del self.__lazy__crispr
@@ -227,6 +236,7 @@ def _():
         d = merge.dm_expr.copy()
         d = d.sel(rows=self.train_split.train)
         d['data'] = _scale(d.data.astype('float32'))
+        d = d.reset_coords(['mean', 'var', 'train'])
         return d
     _playground11.dm_expr = dm_expr
     #del self.__lazy__dm_expr
@@ -238,6 +248,7 @@ def _():
         d['txMid'] = (d.txStart+d.txEnd)/2
         d['data'] = _scale(d.data.astype('float32'))
         d = d.sortby(['chrom', 'txMid'])
+        d = d.reset_coords(['mean', 'var', 'train'])
         return d
     _playground11.dm_cnv = dm_cnv
     #del self.__lazy__dm_cnv
@@ -250,6 +261,7 @@ def _():
         d['data'] = _scale(d.data.astype('float32'))
         with dask.config.set(**{'array.slicing.split_large_chunks': False}):
             d = d.sortby(['chrom', 'txMid'])
+        d = d.reset_coords(['mean', 'var'])
         return d
     _playground11.gdc_cnv = gdc_cnv
     #del self.__lazy__gdc_cnv
@@ -257,7 +269,6 @@ def _():
     @lazy_property
     def dm_cnv_fft(self):
         d = self.dm_cnv.data.assign_coords(arm=self.dm_cnv.arm)
-        d = d.drop(['mean', 'var'])
         d = _fft1(d, 10, 'arm', 'cols')
         d = d.drop('arm')
         return d
@@ -284,7 +295,6 @@ def _():
     @lazy_property
     def gdc_cnv_fft(self):
         d = self.gdc_cnv.data.assign_coords(arm=self.gdc_cnv.arm)
-        d = d.drop(['mean', 'var'])
         d = _fft1(d, 10, 'arm', 'cols')
         d = d.drop('arm')
         return d
@@ -480,7 +490,12 @@ def _():
     @lazy_property
     def crispr_model(self):
         def _build():
-            x1 = (self.crispr_cnv_fit.r2[1:,:]>2).sum(axis=1).to_series()
+            x1 = self.crispr_cnv_fit.r2[1:,:]
+            x1 = x1.assign_coords(group=('fft_group', ['cnv:'+str(x) for x in x1.fft_group.values]))
+            x1 = x1.swap_dims(fft_group='group')
+            crispr_cnv_fit_r2 = x1>2
+
+            x1 = crispr_cnv_fit_r2.sum(axis=1).swap_dims(group='fft_group').to_series()
             x1 = x1.pipe(lambda x: x[x > 0])
             x1 = [0] + list(x1.index)
             x1 = {i: self.dm_cnv_fft_svd[i] for i in x1}
@@ -496,14 +511,12 @@ def _():
             x1 = x1.cut(np.s_[:self.dm_expr_svd_pc])
             x1 = x1.inv(0)
             x1 = xa.merge([x1.us.rename('us'), x1.v.rename('v')])
-            x1 = x1.drop(['mean', 'var'])
             x1 = x1.persist()
             x1 = x1.assign_coords(pc = ['expr:'+str(pc) for pc in x1.pc.values])
             x1 = x1.assign_coords(group=('pc', np.repeat('expr' , x1.pc.shape[0])))
             dm_expr_svd = x1
 
             crispr = self.crispr.data.copy()
-            crispr = crispr.drop(['mean', 'var'])
             crispr.data = crispr.data.persist()
             crispr = crispr.rename(rows='_rows')
 
@@ -511,17 +524,21 @@ def _():
             v = v + [dm_expr_svd.v]
             v = xa.concat(v, 'pc')
             v = v.rename(rows='_rows', pc='rows')
+            v = v.persist()
 
-            x1 = self.crispr_cnv_fit.r2[1:,:]
-            x1 = x1.drop(['mean', 'var'])
-            x1 = x1.rename(fft_group='group')
-            x1 = x1.assign_coords(group=('group', ['cnv:'+str(x) for x in x1.group.values]))
-            crispr_cnv_fit_r2 = x1>2
+            x1 = xa.DataArray(
+                daa.full((2, crispr_cnv_fit_r2.shape[1]), True, dtype=bool),
+                dims=('group', 'cols'),
+                coords=dict(group=['cnv:0', 'expr'], cols=crispr_cnv_fit_r2.cols)
+            )
+            x1 = xa.concat([x1, crispr_cnv_fit_r2.drop('fft_group')], 'group')
+            x1 = x1.rename('r2').to_series()
+            x1 = x1.pipe(lambda x: x[x])
+            x1 = x1.reset_index().groupby('cols').group.apply(list).to_dict()
+            loc_groups = x1
 
             def model(x5):
-                x1 = crispr_cnv_fit_r2.loc[:,x5]
-                x1 = x1.sel(group=x1)
-                x1 = np.hstack([x1.group.values, ['cnv:0', 'expr']])
+                x1 = loc_groups[x5]
                 x1 = v.sel(rows=v.group.isin(x1))
                 x1 = SVD.from_mat(x1).inv(0).usv
                 x1 = x1 @ crispr.loc[:, x5]
@@ -566,9 +583,9 @@ def _():
             x8 = SimpleNamespace()
             x8.u = x4
             x8.vs = x7
-            x8.crispr_stats = self.crispr[['mean', 'var']].reset_coords(['mean', 'var'])
-            x8.expr_stats = self.dm_expr[['mean', 'var']].reset_coords(['mean', 'var'])
-            x8.cnv_stats = self.dm_cnv[['mean', 'var', 'chrom', 'arm', 'txMid']].reset_coords(['mean', 'var'])
+            x8.crispr_stats = self.crispr[['mean', 'var']]
+            x8.expr_stats = self.dm_expr[['mean', 'var']]
+            x8.cnv_stats = self.dm_cnv[['mean', 'var', 'chrom', 'arm', 'txMid']]
             x8.cnv_stats = x8.cnv_stats.merge(self.dm_cnv_fft_stats)
 
             return x8
@@ -682,11 +699,11 @@ def _():
 
     @lazy_property
     def crispr_model_score(self):
-        x1 = self.dm_prediction
+        x1 = self.dm_prediction.copy()
         x1 -= x1.mean(axis=0)
         x1 /= np.sqrt((x1**2).sum(axis=0))
 
-        x2 = merge.crispr.data
+        x2 = merge.crispr.data.copy()
         x2 -= x2.mean(axis=0)
         x2 /= np.sqrt((x2**2).sum(axis=0))
 
@@ -755,15 +772,24 @@ def _():
     _playground11.predict = predict
 _()
 
+playground11 = _playground11('full', 1)
+
+#playground11 = _playground11('20210608-0.8', 0.8)
 
 self = playground11
 
 self.crispr_model_score.sort_values(True).tail(20)
 
+px.scatter(
+    self.crispr_model_score.reset_index().rename(columns={False: 'train: False', True: 'train: True'}),
+    'train: True', 'train: False',
+    hover_data=['cols']
+).show()
+
 crispr = self.crispr_prediction
 
 px.scatter(
-    crispr.sel(cols=crispr.symbol=='TP63').squeeze().to_dataframe().sort_values('source'),
+    crispr.sel(cols=crispr.symbol=='WRN').squeeze().to_dataframe().sort_values('source'),
     'source', 'data',
     hover_data=['row_label']
 ).show()
