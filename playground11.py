@@ -118,7 +118,7 @@ def _svd1(d, cutoff, cols, rand = False):
     x4 = x4.rename({'freq': 'cols'}).drop(['fft_arm', 'fft_freq'])
     x4['fft_group'] = ('cols', np.zeros(x4.shape[1]))
     x3 = xa.concat([x3, x4], 'cols')
-    x3 = dmlp.StandardScaler().fit_transform(x3)
+    #x3 = dmlp.StandardScaler().fit_transform(x3)
     x3['fft_group'] = x3.fft_group.astype('int')
     if rand:
         x3.data = daa.apply_along_axis(np.random.permutation, 0, x3.data, shape=(x3.shape[0],), dtype=x3.dtype)
@@ -195,7 +195,7 @@ class _playground11:
 playground11 = _playground11()
 
 def _():
-    _playground11.storage = Dir(config.cache/'playground11')
+    _playground11.storage = Dir(config.cache/'playground11'/'full')
 
     @lazy_property
     def crispr(self):
@@ -244,6 +244,23 @@ def _():
         return d
     _playground11.dm_cnv_fft = dm_cnv_fft
     #del self.__lazy__dm_cnv_fft
+
+    @lazy_property
+    def dm_cnv_fft_stats(self):
+        d = self.dm_cnv_fft
+
+        d1 = xa.Dataset()
+        d1['fft_mean'] = d.fft.mean(axis=0)
+        d1['fft_var'] = d.fft.var(axis=0)
+
+        d2 = xa.Dataset()
+        d2['fft_resid_mean'] = d.fft_resid.mean(axis=0)
+        d2['fft_resid_var'] = d.fft_resid.var(axis=0)
+
+        d = xa.merge([d1, d2])
+        return d
+    _playground11.dm_cnv_fft_stats = dm_cnv_fft_stats
+    #del self.__lazy__dm_cnv_fft_stats
 
     @lazy_property
     def gdc_cnv_fft(self):
@@ -532,7 +549,9 @@ def _():
             x8.vs = x7
             x8.crispr_stats = self.crispr[['mean', 'var']].reset_coords(['mean', 'var'])
             x8.expr_stats = self.dm_expr[['mean', 'var']].reset_coords(['mean', 'var'])
-            x8.cnv_stats = self.dm_cnv[['mean', 'var', 'chrom', 'txMid']].reset_coords(['mean', 'var'])
+            x8.cnv_stats = self.dm_cnv[['mean', 'var', 'chrom', 'arm', 'txMid']].reset_coords(['mean', 'var'])
+            x8.cnv_stats = x8.cnv_stats.merge(self.dm_cnv_fft_stats)
+
             return x8
 
         s = Path(self.storage.path)/'crispr_model'
@@ -564,7 +583,42 @@ def _():
 
     def crispr_predict(self, expr, cnv):
         model = self.crispr_model
-    _playground11.predict = predict
+
+        expr = expr - model.expr_stats['mean']
+        expr = expr/np.sqrt(model.expr_stats['var'])
+        expr = expr.rename(rows='_rows', cols='rows')
+
+        cnv = cnv - model.cnv_stats['mean']
+        cnv = cnv/np.sqrt(model.cnv_stats['var'])
+        cnv = xa.merge([cnv.rename('data'), model.cnv_stats[['arm', 'chrom', 'txMid']]])
+        cnv = cnv.sortby(['chrom', 'txMid'])
+        cnv = cnv.rename(rows='_rows')
+
+        d = cnv.data.assign_coords(arm=cnv.arm)
+        d = _fft1(d, 10, 'arm', 'cols')
+        d = d.drop('arm')
+        d['fft'] = d.fft - model.cnv_stats['fft_mean']
+        d['fft'] = d.fft/np.sqrt(model.cnv_stats['fft_var'])
+        d['fft_resid'] = d.fft_resid - model.cnv_stats['fft_resid_mean']
+        d['fft_resid'] = d.fft_resid/np.sqrt(model.cnv_stats['fft_resid_var'])
+        cnv = cnv.merge(d)
+
+        expr_v = expr @ model.vs['expr']
+        cnv_v_glob = cnv.fft.rename(freq='rows') @ model.vs['cnv:0']
+        cnv_v_loc = [
+            cnv.fft_resid.rename(cols='rows') @ x
+            for i, x in model.vs.items()
+            if i not in ['cnv:0', 'expr']
+        ]
+        crispr = [expr_v, cnv_v_glob] + cnv_v_loc
+        crispr = xa.concat(crispr, 'pc')
+        crispr = crispr @ model.u
+        crispr = crispr.rename(_rows='rows')
+        crispr = crispr * np.sqrt(model.crispr_stats['var'])
+        crispr = crispr + model.crispr_stats['mean']
+
+        return crispr
+    _playground11.crispr_predict = crispr_predict
 
     def predict(self, col = None, symbol = None, entrez = None):
         if col is None:
@@ -602,11 +656,35 @@ def _():
     _playground11.predict = predict
 _()
 
+
+self = playground11
+expr = merge.dm_expr.data.copy().astype('float32')
+cnv = merge.dm_cnv.data.copy().astype('float32')
+crispr = merge.crispr.data.copy().astype('float32')
+crispr_predict = self.crispr_predict(expr, cnv).persist()
+
+self.crispr.cols.sel(cols=self.crispr.symbol=='WRN')
+plt.plot(crispr_predict.loc[:,'WRN (7486)'], crispr.loc[:,'WRN (7486)'], '.')
+
+x1 = crispr_predict
+x1 -= x1.mean(axis=0)
+x1 /= np.sqrt((x1**2).sum(axis=0))
+
+x2 = crispr
+x2 -= x2.mean(axis=0)
+x2 /= np.sqrt((x2**2).sum(axis=0))
+
+x3 = (x1 * x2).sum(axis=0)
+
+x3 = x3.compute()
+
+plt.hist(x3, 100)
+plt.gca().axline((0.57, 0), (0.57, 100), color='red')
+
+
 self = playground11
 self.dm_cnv_fft_svd_pc
 
-expr = merge.dm_expr.copy()
-cnv = merge.dm_cnv.copy()
 
 m = playground11
 plot_fft_resid(m.dm_cnv.merge(m.dm_cnv_fft).drop('mean'))
@@ -620,7 +698,6 @@ m = playground11
 x5 = m.predict(symbol='WRN')
 plt.plot(x5.obs, x5.pred, '.')
 print(x5.r2.round(2).item(), x5.r2_rand.round(2).item())
-
 
 
 m = playground11
@@ -641,6 +718,5 @@ pd.DataFrame(dict(
     cnv_glob = (m.crispr_cnv_fit.r2[0,:]>2).values,
     cnv_loc = ((m.crispr_cnv_fit.r2[1:,:]>2).sum(axis=0)>2).values
 )).value_counts().sort_index()#.reset_index().pivot(index='loc', columns='glob')
-
 
 
