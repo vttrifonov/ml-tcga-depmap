@@ -7,7 +7,8 @@ renv::install(c(
   'reshape2',
   'DT',
   'shiny',
-  'plotly'
+  'plotly',
+  'ggrepel'
 ))
 
 
