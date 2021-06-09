@@ -537,14 +537,15 @@ def _():
             x1 = x1.reset_index().groupby('cols').group.apply(list).to_dict()
             loc_groups = x1
 
-            def model(x5):
-                x1 = loc_groups[x5]
-                x1 = v.sel(rows=v.group.isin(x1))
-                x1 = SVD.from_mat(x1).inv(0).usv
-                x1 = x1 @ crispr.loc[:, x5]
-                return x1
+            def model(x, y):
+                return (SVD.from_mat(x).inv(0).usv @ y).persist()
 
-            x1 = [model(x) for x in crispr.cols.values]
+            import joblib
+            x1 = [joblib.delayed(model)(
+                v.sel(rows=v.group.isin(loc_groups[x])).persist(),
+                crispr.loc[:, x].persist()
+            ) for x in crispr.cols.values]
+            x1 = joblib.Parallel(n_jobs=10)(x1)
 
             x2 = [set(x.rows.values) for x in x1]
             x2 = set().union(*x2)
@@ -719,16 +720,27 @@ def _():
     @lazy_property
     def crispr_prediction(self):
         x1 = self.dm_prediction.copy()
-        x1['row_label'] = merge.dm_expr.CCLE_Name
-        x1['source'] = ('rows', np.repeat('dm_prediction', x1.rows.shape[0]))
+        x1['row_label'] = merge.dm_expr.stripped_cell_line_name
+        x1['source'] = merge.dm_expr.lineage_subtype
+        x1['source'] = ('rows', ['CCLE-' + x for x in x1.source.astype(str).values])
+        x1['train'] = self.train_split.train
+        x1['observed'] = ('rows', np.repeat(False, x1.rows.shape[0]))
+        x1['dataset'] = ('rows', np.repeat('DepMap', x1.rows.shape[0]))
 
         x2 = self.gdc_prediction.copy()
-        x2['row_label'] = merge.gdc_expr.project_id
+        x2['row_label'] = merge.gdc_expr.case_id
         x2['source'] = merge.gdc_expr.project_id
+        x2['train'] = ('rows', np.repeat(False, x2.rows.shape[0]))
+        x2['observed'] = ('rows', np.repeat(False, x2.rows.shape[0]))
+        x2['dataset'] = ('rows', np.repeat('TCGA', x2.rows.shape[0]))
 
         x3 = merge.crispr.data.copy().astype('float32')
-        x3['row_label'] = merge.dm_expr.CCLE_Name
-        x3['source'] = ('rows', np.repeat('dm_experiment', x3.rows.shape[0]))
+        x3['row_label'] = merge.dm_expr.stripped_cell_line_name
+        x3['source'] = merge.dm_expr.lineage_subtype
+        x3['source'] = ('rows', ['CCLE-' + x for x in x3.source.astype(str).values])
+        x3['train'] = self.train_split.train
+        x3['observed'] = ('rows', np.repeat(True, x3.rows.shape[0]))
+        x3['dataset'] = ('rows', np.repeat('DepMap', x3.rows.shape[0]))
 
         crispr = xa.concat([x1, x2, x3], 'rows')
         crispr = crispr.assign_coords(merge.crispr[['symbol', 'entrez']])
@@ -772,66 +784,67 @@ def _():
     _playground11.predict = predict
 _()
 
-playground11 = _playground11('full', 1)
+if __name__ == '__main__':
+    #playground11 = _playground11('full', 1)
 
-#playground11 = _playground11('20210608-0.8', 0.8)
+    playground11 = _playground11('20210608-0.8', 0.8)
 
-self = playground11
+    self = playground11
 
-self.crispr_model_score.sort_values(True).tail(20)
+    self.crispr_model_score.sort_values(True).tail(20)
 
-px.scatter(
-    self.crispr_model_score.reset_index().rename(columns={False: 'train: False', True: 'train: True'}),
-    'train: True', 'train: False',
-    hover_data=['cols']
-).show()
+    px.scatter(
+        self.crispr_model_score.reset_index().rename(columns={False: 'train: False', True: 'train: True'}),
+        'train: True', 'train: False',
+        hover_data=['cols']
+    ).show()
 
-crispr = self.crispr_prediction
+    crispr = self.crispr_prediction
 
-px.scatter(
-    crispr.sel(cols=crispr.symbol=='WRN').squeeze().to_dataframe().sort_values('source'),
-    'source', 'data',
-    hover_data=['row_label']
-).show()
+    plot_data = crispr.sel(cols=crispr.symbol=='WRN').squeeze().to_dataframe().sort_values(['source'])
+    plot_data['color'] = plot_data.dataset+','+np.where(plot_data.observed, 'obs', 'pred')+','+np.where(plot_data.train, 'train', 'test')
+    px.scatter(
+        plot_data,
+        x='source', y='data',
+        color='color',
+        hover_data=['row_label'],
+        title=plot_data.symbol[0]
+    ).show()
 
+    self = playground11
+    self.dm_cnv_fft_svd_pc
 
+    m = playground11
+    plot_fft_resid(m.dm_cnv.merge(m.dm_cnv_fft).drop('mean'))
+    plot_fft(m.dm_cnv.merge(m.dm_cnv_fft).drop('mean'))
 
-
-self = playground11
-self.dm_cnv_fft_svd_pc
-
-
-m = playground11
-plot_fft_resid(m.dm_cnv.merge(m.dm_cnv_fft).drop('mean'))
-plot_fft(m.dm_cnv.merge(m.dm_cnv_fft).drop('mean'))
-
-m = playground11
-(m.crispr_cnv_fit.r2[1:,:]>3).sum(axis=1).to_series().sort_values()
-
-
-m = playground11
-x5 = m.predict(symbol='WRN')
-plt.plot(x5.obs, x5.pred, '.')
-print(x5.r2.round(2).item(), x5.r2_rand.round(2).item())
+    m = playground11
+    (m.crispr_cnv_fit.r2[1:,:]>3).sum(axis=1).to_series().sort_values()
 
 
-m = playground11
-plt.figure()
-plt.gca().plot(m.crispr_cnv_fit.r2[0,:], m.crispr_expr_fit.r2, '.')
+    m = playground11
+    x5 = m.predict(symbol='WRN')
+    plt.plot(x5.obs, x5.pred, '.')
+    print(x5.r2.round(2).item(), x5.r2_rand.round(2).item())
 
-plt.figure()
-plt.gca().plot(m.crispr_cnv_fit.r2[0,:], m.crispr_cnv_fit.r2[1:,:].max(axis=0), '.')
 
-plt.figure()
-plt.gca().plot(m.crispr_expr_fit.r2, m.crispr_cnv_fit.r2[1:,:].mean(axis=0), '.')
+    m = playground11
+    plt.figure()
+    plt.gca().plot(m.crispr_cnv_fit.r2[0,:], m.crispr_expr_fit.r2, '.')
 
-plt.figure()
-plt.gca().plot(m.crispr_cnv_fit.r2[0,:], m.crispr_cnv_fit.r2[1,:], '.')
+    plt.figure()
+    plt.gca().plot(m.crispr_cnv_fit.r2[0,:], m.crispr_cnv_fit.r2[1:,:].max(axis=0), '.')
 
-pd.DataFrame(dict(
-    expr=(m.crispr_expr_fit.r2 > 2).values,
-    cnv_glob = (m.crispr_cnv_fit.r2[0,:]>2).values,
-    cnv_loc = ((m.crispr_cnv_fit.r2[1:,:]>2).sum(axis=0)>2).values
-)).value_counts().sort_index()#.reset_index().pivot(index='loc', columns='glob')
+    plt.figure()
+    plt.gca().plot(m.crispr_expr_fit.r2, m.crispr_cnv_fit.r2[1:,:].mean(axis=0), '.')
+
+    plt.figure()
+    plt.gca().plot(m.crispr_cnv_fit.r2[0,:], m.crispr_cnv_fit.r2[1,:], '.')
+
+    pd.DataFrame(dict(
+        expr=(m.crispr_expr_fit.r2 > 2).values,
+        cnv_glob = (m.crispr_cnv_fit.r2[0,:]>2).values,
+        cnv_loc = ((m.crispr_cnv_fit.r2[1:,:]>2).sum(axis=0)>2).values
+    )).value_counts().sort_index()#.reset_index().pivot(index='loc', columns='glob')
 
 
