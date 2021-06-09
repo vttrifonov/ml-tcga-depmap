@@ -786,8 +786,8 @@ _()
 
 if __name__ == '__main__':
     #playground11 = _playground11('full', 1)
-
-    playground11 = _playground11('20210608-0.8', 0.8)
+    #playground11 = _playground11('20210608-0.8', 0.8)
+    playground11 = _playground11('20210608-0.5', 0.5)
 
     self = playground11
 
