@@ -701,42 +701,65 @@ def _():
     @lazy_property
     def crispr_model_score(self):
         x1 = self.dm_prediction.copy()
-        x1 -= x1.mean(axis=0)
-        x1 /= np.sqrt((x1**2).sum(axis=0))
+        x1['train'] = self.train_split.train
+        x1 = x1.groupby('train').apply(lambda x: x-x.mean(axis=0))
+        x1 = x1.groupby('train').apply(lambda x: x/np.sqrt((x**2).sum(axis=0)))
 
         x2 = merge.crispr.data.copy()
-        x2 -= x2.mean(axis=0)
-        x2 /= np.sqrt((x2**2).sum(axis=0))
+        x2['train'] = self.train_split.train
+        x2 = x2.groupby('train').apply(lambda x: x-x.mean(axis=0))
+        x2 = x2.groupby('train').apply(lambda x: x/np.sqrt((x**2).sum(axis=0)))
 
         x3 = x1*x2
-        x3['train'] = self.train_split.train
         x3 = x3.groupby('train').sum(dim='rows')
+
         x3 = x3.to_dataframe().reset_index().pivot_table(index='cols', columns='train', values='data')
+        x3['n'] = (np.abs(self.crispr_model.u)>0).sum(axis=0).to_series()
+        x3['m'] = self.train_split.train.sum().item()
 
         return x3
     _playground11.crispr_model_score = crispr_model_score
     # del self.__lazy__crispr_model_score
 
     @lazy_property
+    @cached_property(type=Dir.pickle)
+    def dm_rows_annot(self):
+        x1 = merge.dm_expr1.drop_dims('cols')
+        x2 = merge.dm_cnv1.drop_dims(['cols', 'cyto_cols'])
+        x3 = merge.crispr1.drop_dims('cols')
+        return xa.merge([x1, x2, x3])
+    _playground11.dm_rows_annot = dm_rows_annot
+    # del self.__lazy__dm_rows_annot
+
+    @lazy_property
+    @cached_property(type=Dir.pickle)
+    def gdc_rows_annot(self):
+        x1 = merge.gdc_expr1.drop_dims('cols').drop('is_normal')
+        x2 = merge.gdc_cnv1.drop_dims(['cols', 'cyto_cols'])
+        return xa.merge([x1, x2])
+    _playground11.gdc_rows_annot = gdc_rows_annot
+    # del self.__lazy__gdc_rows_annot
+
+    @lazy_property
     def crispr_prediction(self):
         x1 = self.dm_prediction.copy()
-        x1['row_label'] = merge.dm_expr.stripped_cell_line_name
-        x1['source'] = merge.dm_expr.lineage_subtype
+        x1['row_label'] = self.dm_rows_annot.stripped_cell_line_name
+        x1['source'] = self.dm_rows_annot.lineage_subtype
         x1['source'] = ('rows', ['CCLE-' + x for x in x1.source.astype(str).values])
         x1['train'] = self.train_split.train
         x1['observed'] = ('rows', np.repeat(False, x1.rows.shape[0]))
         x1['dataset'] = ('rows', np.repeat('DepMap', x1.rows.shape[0]))
 
         x2 = self.gdc_prediction.copy()
-        x2['row_label'] = merge.gdc_expr.case_id
-        x2['source'] = merge.gdc_expr.project_id
+        x2['row_label'] = self.gdc_rows_annot.case_id
+        x2['source'] = self.gdc_rows_annot.project_id
         x2['train'] = ('rows', np.repeat(False, x2.rows.shape[0]))
         x2['observed'] = ('rows', np.repeat(False, x2.rows.shape[0]))
         x2['dataset'] = ('rows', np.repeat('TCGA', x2.rows.shape[0]))
 
         x3 = merge.crispr.data.copy().astype('float32')
-        x3['row_label'] = merge.dm_expr.stripped_cell_line_name
-        x3['source'] = merge.dm_expr.lineage_subtype
+        x3['row_label'] = self.dm_rows_annot.stripped_cell_line_name
+        x3['source'] = self.dm_rows_annot.lineage_subtype
         x3['source'] = ('rows', ['CCLE-' + x for x in x3.source.astype(str).values])
         x3['train'] = self.train_split.train
         x3['observed'] = ('rows', np.repeat(True, x3.rows.shape[0]))
@@ -786,16 +809,16 @@ _()
 
 if __name__ == '__main__':
     #playground11 = _playground11('full', 1)
-    #playground11 = _playground11('20210608-0.8', 0.8)
-    playground11 = _playground11('20210608-0.5', 0.5)
+    playground11 = _playground11('20210608-0.8', 0.8)
+    #playground11 = _playground11('20210608-0.5', 0.5)
 
     self = playground11
 
     self.crispr_model_score.sort_values(True).tail(20)
 
     px.scatter(
-        self.crispr_model_score.reset_index().rename(columns={False: 'train: False', True: 'train: True'}),
-        'train: True', 'train: False',
+        self.crispr_model_score.reset_index().rename(columns={False: 'test', True: 'train'}),
+        'train', 'test',
         hover_data=['cols']
     ).show()
 
