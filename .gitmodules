@@ -19,3 +19,6 @@
 [submodule "ucsc-genome-browser"]
 	path = ucsc-genome-browser
 	url = ssh://git@github.com/vttrifonov/ucsc-genome-browser
+[submodule "string"]
+	path = string
+	url = ssh://git@github.com/vttrifonov/string
