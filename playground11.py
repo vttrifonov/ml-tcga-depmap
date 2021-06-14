@@ -808,11 +808,84 @@ def _():
 _()
 
 if __name__ == '__main__':
-    #playground11 = _playground11('full', 1)
-    playground11 = _playground11('20210608-0.8', 0.8)
+    playground11 = _playground11('full', 1)
+    #playground11 = _playground11('20210608-0.8', 0.8)
     #playground11 = _playground11('20210608-0.5', 0.5)
 
     self = playground11
+
+    import string_db
+    x1 = self.dm_expr.assign_coords(self.dm_cnv[['symbol']]).data
+    #x1_1 = x1.cols.values
+    x1_1 = np.random.choice(x1.cols.values, 1000)
+    x1 = x1.sel(cols=x1_1)
+    x6 = np.repeat('?', x1.shape[1])
+    x6 = ','.join(x6)
+    x6 = string_db.query(f'select preferred_name, protein_external_id from info where preferred_name in ({x6})', x1.symbol.values)
+    x3 = np.repeat('?', x6.shape[0])
+    x3 = ','.join(x3)
+    x3 = string_db.query(
+        f'select * from links where protein1 in ({x3}) and protein2 in ({x3})',
+        np.hstack([x6.protein_external_id, x6.protein_external_id])
+    )
+    x6 = x6[x6.protein_external_id.isin(np.unique(x3[['protein1', 'protein2']].to_numpy().ravel()))]
+    x6 = x6.rename(columns={'preferred_name': 'symbol'}).set_index('symbol').protein_external_id
+    x6 = x6.drop_duplicates()
+    x1 = x1.sel(cols=x1.symbol.isin(x6.index))
+    x1 = x1.swap_dims(cols='symbol')
+    x1 = x1[:, x1.symbol.to_series().reset_index(drop=True).drop_duplicates().index]
+    x1['protein'] = x6
+    x1 = x1.swap_dims(symbol='protein')
+    x1 = x1.drop(['cols', 'symbol'])
+    x1 = x1/np.sqrt((x1**2).sum(dim='rows'))
+    #x1.data = daa.apply_along_axis(np.random.permutation, 0, x1.data, shape=(x1.shape[0],)).persist()
+    x1 = x1.rename(protein='protein1').T @ x1.rename(protein='protein2')
+    x1 = x1.persist()
+    x2 = SVD.from_mat(x1, solver='full')
+    x2.s = 1/(x2.s+1)
+    x2 = x2.usv.persist()
+    #x2 = x2.cut(np.s_[:400]).inv(0).usv.persist()
+    x2_3 = np.diag(np.sqrt(1/np.diag(x2)))
+    x2.data = x2_3 @ x2.data @ x2_3
+    x2 = x2.persist()
+    x3['score'] = x3.experiments.astype(int)
+    x4 = pd.pivot_table(x3, values='score', index='protein1', columns='protein2', fill_value=0)
+    x4 = xa.DataArray(x4)
+    x5 = xa.merge([x1.rename('data'), x2.rename('inv'), x4.rename('score')])
+    plt.hist((x5.data - np.diag(np.diag(x5.data))).values.ravel(), 100)
+    plt.hist((x5.inv - np.diag(np.diag(x5.inv))).values.ravel(), 100)
+    pd.Series(x5.score.values.ravel()).pipe(lambda x: x[x > 0]).sort_values()
+    x5.to_dataframe().query('score>0').plot.scatter('data', 'score')
+    np.corrcoef(
+        x5.inv.values.ravel()**2,
+        (x5.score.values.ravel())
+    )
+    pd.crosstab(
+        x5.data.values.ravel()>0.4,
+        np.random.permutation(x5.score.values.ravel()>600),
+        margins=False
+    )
+
+    import scipy.cluster.hierarchy as spch
+    import scipy.spatial.distance as spsd
+
+    x7 = spch.linkage(spsd.squareform(1-x1, checks=False), method='average')
+    x7 = spch.to_tree(x7).pre_order()
+    spch.dendrogram(x7)
+    plt.imshow((x1 - np.diag(np.diag(x1)))[x7, x7], cmap='bwr', vmin=-0.6, vmax=0.6)
+
+    x7 = spch.linkage(x1.T, method='average')
+    x7 = spch.to_tree(x7).pre_order()
+    spch.dendrogram(x7)
+    plt.imshow((x1 - np.diag(np.diag(x1)))[x7, x7], cmap='bwr', vmin=-0.6, vmax=0.6)
+
+    x8 = spch.linkage(spsd.squareform(1-x2, checks=False), method='average')
+    x8 = spch.to_tree(x8).pre_order()
+    x9 = x2[x8,x8]
+    plt.imshow((x9 - np.diag(np.diag(x9))), cmap='bwr', vmin=-0.1, vmax=0.1)
+    spch.dendrogram(x8)
+    plt.hist(x2.values.ravel(), 1000)
+
 
     self.crispr_model_score.sort_values(True).tail(20)
 
