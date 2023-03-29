@@ -1,3 +1,4 @@
+# %%
 import matplotlib.pyplot as plt
 import seaborn as sns
 from common.dir import cached_property, Dir
@@ -24,6 +25,8 @@ pd.set_option('display.max_columns', 500)
 pd.set_option('display.width', 1000)
 
 config.exec()
+
+# %%
 
 def _smooth(x, window_len=11, window='hanning'):
     if len(x) < window_len:
