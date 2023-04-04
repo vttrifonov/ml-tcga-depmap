@@ -20,6 +20,8 @@ from helpers import config
 from svd import SVD
 from merge import merge
 
+# %%
+
 pd.set_option('display.max_rows', 500)
 pd.set_option('display.max_columns', 500)
 pd.set_option('display.width', 1000)
@@ -192,6 +194,8 @@ def plot_fft(x1):
         x='index', y=['rfft', 'data'], color='arm',
         hover_data=['cyto', 'cols']
     ).show()
+
+# %%
 
 class _playground11:
     pass
@@ -411,7 +415,7 @@ def _():
         x1 = self.dm_cnv_fft_svd[0]
         x1 = x1.u[:,:int(self.dm_cnv_fft_svd_pc[0].item())]
         x6 = self.dm_expr.data
-        x6 = x6 - x1[0] @ (x1[0].T @ x6)
+        x6 = x6 - x1 @ (x1.T @ x6)
         x6 = dmlp.StandardScaler().fit_transform(x6)
         x6 = x6.persist()
         return x6
@@ -810,12 +814,15 @@ def _():
     _playground11.predict = predict
 _()
 
+# %%
 if __name__ == '__main__':
     playground11 = _playground11('full', 1)
     #playground11 = _playground11('20210608-0.8', 0.8)
     #playground11 = _playground11('20210608-0.5', 0.5)
 
     self = playground11
+
+    # %%
 
     import string_db
     x1 = self.dm_expr.assign_coords(self.dm_cnv[['symbol']]).data
