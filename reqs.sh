@@ -3,7 +3,8 @@
 conda install python==3.7 ipykernel
 conda install seaborn
 conda install dask==2021.10.0
-conda install xarray
+conda install pandas==1.2.4
+conda install xarray==0.17.0
 conda install zarr
 conda install importlib_metadata
 conda install dask-ml
