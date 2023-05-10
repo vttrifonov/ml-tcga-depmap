@@ -813,31 +813,9 @@ def _():
     _playground11.predict = predict
 _()
 
+
 # %%
-if __name__ == '__main__':
-    #playground11 = _playground11('full', 1)
-    #playground11 = _playground11('20210608-0.8', 0.8)
-    #playground11 = _playground11('20210608-0.5', 0.5)
-
-    self = playground11
-
-    # %%
-    self = _playground11(f'20230509/0.8/1', 0.8)
-    Path(self.storage.path).mkdir(
-        parents=True, exist_ok=True
-    )
-
-    # %%
-    self.train_split
-    self.crispr
-    self.dm_expr
-    self.dm_cnv
-    self.gdc_cnv
-
-    #%%
-    self.crispr_model
-
-    # %%
+def _():
     for i in range(5):
         print(i)
         self = _playground11(f'20230509/0.8/{i}', 0.8)
@@ -845,9 +823,24 @@ if __name__ == '__main__':
             parents=True, exist_ok=True
         )
         _ = self.dm_prediction
+    
+# %%
+def _():
+    self = _playground11(f'20230509/0.8/1', 0.8)
+    Path(self.storage.path).mkdir(
+        parents=True, exist_ok=True
+    )
 
-    # %%
+    self.train_split
+    self.crispr
+    self.dm_expr
+    self.dm_cnv
+    self.gdc_cnv
 
+    self.crispr_model
+
+# %%
+def _():
     import string_db
     x1 = self.dm_expr.assign_coords(self.dm_cnv[['symbol']]).data
     #x1_1 = x1.cols.values
@@ -976,5 +969,14 @@ if __name__ == '__main__':
         cnv_glob = (m.crispr_cnv_fit.r2[0,:]>2).values,
         cnv_loc = ((m.crispr_cnv_fit.r2[1:,:]>2).sum(axis=0)>2).values
     )).value_counts().sort_index()#.reset_index().pivot(index='loc', columns='glob')
+
+
+# %%
+if __name__ == '__main__':
+    #playground11 = _playground11('full', 1)
+    #playground11 = _playground11('20210608-0.8', 0.8)
+    #playground11 = _playground11('20210608-0.5', 0.5)
+
+    self = playground11
 
 
