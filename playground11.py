@@ -278,6 +278,7 @@ def _():
         d = self.dm_cnv.data.assign_coords(arm=self.dm_cnv.arm)
         d = _fft1(d, 10, 'arm', 'cols')
         d = d.drop('arm')
+        d = d.persist()
         return d
     _playground11.dm_cnv_fft = dm_cnv_fft
     #del self.__lazy__dm_cnv_fft
@@ -304,6 +305,7 @@ def _():
         d = self.gdc_cnv.data.assign_coords(arm=self.gdc_cnv.arm)
         d = _fft1(d, 10, 'arm', 'cols')
         d = d.drop('arm')
+        d = d.persist()
         return d
     _playground11.gdc_cnv_fft = gdc_cnv_fft
     #del self.__lazy__gdc_cnv_fft
@@ -365,8 +367,6 @@ def _():
         if not s.exists():
             fft = self.dm_cnv_fft.copy()
             fft['fft_group'] = self.dm_cnv_fft_group
-            fft.fft.data = fft.fft.data.persist()
-            fft.fft_resid.data = fft.fft_resid.data.persist()
             svd = _svd1(fft, 10, 'cols')
             for i, x in svd.items():
                 x.xarray.to_zarr(s/str(i))
@@ -380,7 +380,7 @@ def _():
 
     @lazy_property
     def dm_cnv_fft_svd_rand(self):
-        fft = self.dm_cnv_fft
+        fft = self.dm_cnv_fft.copy()
         fft['fft_group'] = self.dm_cnv_fft_group
         return _svd1(fft, 10, 'cols', True)
     _playground11.dm_cnv_fft_svd_rand = dm_cnv_fft_svd_rand
@@ -545,14 +545,13 @@ def _():
             loc_groups = x1
 
             def model(x, y):
-                return (SVD.from_mat(x).inv(0).usv @ y).persist()
+                svd = SVD.from_mat(x).inv(0)
+                return svd.u @ (svd.s * (svd.v @ y))
 
-            import joblib
-            x1 = [joblib.delayed(model)(
-                v.sel(rows=v.group.isin(loc_groups[x])).persist(),
-                crispr.loc[:, x].persist()
+            x1 = [model(
+                v.sel(rows=v.group.isin(loc_groups[x])),
+                crispr.loc[:, x]
             ) for x in crispr.cols.values]
-            x1 = joblib.Parallel(n_jobs=10)(x1)
 
             x2 = [set(x.rows.values) for x in x1]
             x2 = set().union(*x2)
@@ -563,7 +562,7 @@ def _():
 
             import sparse
 
-            x4 = daa.hstack([x.data for x in x1])
+            x4 = daa.hstack([x.data for x in x1]).compute()
             x4 = sparse.COO(
                 [
                     x2[np.hstack([x.rows.values for x in x1])],
@@ -816,11 +815,36 @@ _()
 
 # %%
 if __name__ == '__main__':
-    playground11 = _playground11('full', 1)
+    #playground11 = _playground11('full', 1)
     #playground11 = _playground11('20210608-0.8', 0.8)
     #playground11 = _playground11('20210608-0.5', 0.5)
 
     self = playground11
+
+    # %%
+    self = _playground11(f'20230509/0.8/1', 0.8)
+    Path(self.storage.path).mkdir(
+        parents=True, exist_ok=True
+    )
+
+    # %%
+    self.train_split
+    self.crispr
+    self.dm_expr
+    self.dm_cnv
+    self.gdc_cnv
+
+    #%%
+    self.crispr_model
+
+    # %%
+    for i in range(5):
+        print(i)
+        self = _playground11(f'20230509/0.8/{i}', 0.8)
+        Path(self.storage.path).mkdir(
+            parents=True, exist_ok=True
+        )
+        _ = self.dm_prediction
 
     # %%
 
