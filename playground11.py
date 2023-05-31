@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from common.dir import cached_property, Dir
 from common.defs import lazy_property
-from types import SimpleNamespace
+from types import SimpleNamespace as namespace
 import types
 import dask.array as daa
 import zarr
@@ -587,7 +587,7 @@ def _():
             }
             x7['expr'] = dm_expr_svd.us.rename(cols='rows')
 
-            x8 = SimpleNamespace()
+            x8 = namespace()
             x8.u = x4
             x8.vs = x7
             x8.crispr_stats = self.crispr[['mean', 'var']]
@@ -611,7 +611,7 @@ def _():
             x8.expr_stats.to_zarr(s / 'expr_stats')
             x8.cnv_stats.to_zarr(s / 'cnv_stats')
 
-        x8 = SimpleNamespace()
+        x8 = namespace()
         x8.u = xa.open_zarr(s/'u').data.astype('float32').rename('u')
         x8.vs = {
             i.name: xa.open_zarr(i).astype('float32').data.rename(i.name)
@@ -989,18 +989,26 @@ def _():
     cnv = self.dm_cnv.copy()
 
     # %%
-    cnv_u = [
-        SVD.from_mat(x5.data).u.to_dataset().assign(
+    cnv_svd = [
+        (a, SVD.from_mat(x.data).inv())
+        for a, x in cnv.groupby('arm')
+    ]
+    cnv_svd = [
+        xa.merge([x.v.rename('u'), x.us.rename('vs')]).\
+        persist().\
+        assign(
             arm=lambda x: ('pc', [a]*x.sizes['pc']),
             arm_pc=lambda x: ('pc', a+':'+x.pc.astype(str).to_series())
-        ).set_coords('arm').swap_dims(pc='arm_pc').u
-        for a, x5 in cnv.groupby('arm')
+        ).set_coords('arm').swap_dims(pc='arm_pc') 
+        for a, x in cnv_svd
     ]
-    cnv_u = dask.persist(*cnv_u)
-    cnv_u = xa.concat(cnv_u, dim='arm_pc').rename('u')
+    cnv_svd = namespace(
+        u=xa.concat([x.u for x in cnv_svd], dim='arm_pc'),
+        vs=[x.vs for x in cnv_svd]
+    )
 
     # %%
-    cnv_cor = cnv_u @ expr.data
+    cnv_cor = cnv_svd.u @ expr.data
     cnv_cor['col_arm'] = cnv.arm
     cnv_cor = (cnv_cor**2).sel(arm_pc=cnv_cor.pc<5).compute().rename('r2')
     cnv_cor = cnv_cor.to_dataframe().sort_values('r2')
@@ -1012,7 +1020,7 @@ def _():
     )
 
     # %%
-    cnv_cor = cnv_u @ crispr.data
+    cnv_cor = cnv_svd.u @ crispr.data
     cnv_cor['col_arm'] = cnv.arm
     cnv_cor = (cnv_cor**2).sel(arm_pc=cnv_cor.pc<5).compute().rename('r2')
     cnv_cor = cnv_cor.to_dataframe().sort_values('r2')
@@ -1024,12 +1032,29 @@ def _():
     )
 
     # %%
-    cnv_u1 = cnv_u.sel(arm_pc=cnv_u.pc<5)
-    cnv_u1 = SVD.from_mat(cnv_u1).u.persist()
+    cnv_u2 = SVD.from_mat(cnv.data).u.persist()    
+
+    x1 = cnv_svd.u.sel(arm_pc=cnv_svd.u.pc<5).rename(pc='pc1')
+    x2 = cnv_u2.sel(pc=cnv_u2.pc<300).rename(pc='pc2')
+    #2 = x2.to_dataset().assign(rows=lambda x: ('rows', np.random.permutation(x.rows.data))).u
+    x3 = (x1 @ x2).persist()
+    x3 = x3.to_dataframe().reset_index()
+    x3.sort_values('u').query('pc2==0')
+    x3.groupby('pc2').u.aggregate(lambda x: ((np.abs(x))>0.1).sum()).\
+        sort_values().reset_index().query('u>5').shape
+    
+    # %%
+    cnv_svd1 = cnv_svd.u.sel(arm_pc=cnv_svd.u.pc<5)
+    cnv_svd1 = SVD.from_mat(cnv_svd1).inv()
+    cnv_svd1 = xa.merge([cnv_svd1.v.rename('u'), cnv_svd1.us.rename('vs')]).persist()
+    cnv_svd1 = cnv_svd1.assign(
+        src=lambda x: ('pc', ['cnv']*x.sizes['pc']),
+        src_pc=lambda x: ('pc', ['cnv:'+x for x in x.pc.astype(str).data]),
+    ).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
 
     # %%    
-    #cnv_expr_cor = cnv_u1 @ (expr[['data']].assign(rows=lambda x: ('rows', np.random.permutation(x.rows.data))).data)
-    cnv_expr_cor = cnv_u1 @ expr.data
+    #cnv_expr_cor = cnv_svd1.u @ (expr[['data']].assign(rows=lambda x: ('rows', np.random.permutation(x.rows.data))).data)
+    cnv_expr_cor = cnv_svd1.u @ expr.data
     cnv_expr_cor = (cnv_expr_cor**2).rename('r2').to_dataframe().reset_index()
     print(cnv_expr_cor.groupby('cols').r2.sum().mean())
     sns.histplot(
@@ -1038,8 +1063,8 @@ def _():
     )
 
     # %%
-    #cnv_crispr_cor = cnv_u1 @ (crispr[['data']].assign(rows=lambda x: ('rows', np.random.permutation(x.rows.data))).data)
-    cnv_crispr_cor = cnv_u1 @ crispr.data
+    #cnv_crispr_cor = cnv_svd1.u @ (crispr[['data']].assign(rows=lambda x: ('rows', np.random.permutation(x.rows.data))).data)
+    cnv_crispr_cor = cnv_svd1.u @ crispr.data
     cnv_crispr_cor = (cnv_crispr_cor**2).rename('r2').to_dataframe().reset_index()
     print(cnv_crispr_cor.groupby('cols').r2.sum().mean())
     sns.histplot(
@@ -1048,46 +1073,58 @@ def _():
     )
 
     # %%
-    expr1 = expr.data - cnv_u1 @ (cnv_u1 @ expr.data)
-    expr1_u = SVD.from_mat(expr1).u.persist()
+    expr1_svd = expr.data - cnv_svd1.u @ (cnv_svd1.u @ expr.data)
+    expr1_svd = SVD.from_mat(expr1_svd).inv()
+    expr1_svd = xa.merge([expr1_svd.v.rename('u'), expr1_svd.us.rename('vs')]).persist()
+    expr1_svd = expr1_svd.assign(
+        src=lambda x: ('pc', ['expr']*x.sizes['pc']),
+        src_pc=lambda x: ('pc', ['expr:'+x for x in x.pc.astype(str).data]),
+    ).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
+
 
     # %%
-    #expr_crispr_cor = expr1_u @ (crispr[['data']].assign(rows=lambda x: ('rows', np.random.permutation(x.rows.data))).data)
-    expr_crispr_cor = expr1_u @ crispr.data
+    #expr_crispr_cor = expr1_svd.u @ (crispr[['data']].assign(rows=lambda x: ('rows', np.random.permutation(x.rows.data))).data)
+    expr_crispr_cor = expr1_svd.u @ crispr.data
     expr_crispr_cor = (expr_crispr_cor**2).rename('r2').to_dataframe().reset_index()
-    print(expr_crispr_cor[expr_crispr_cor.pc<=100].groupby('cols').r2.sum().mean())
+    print(expr_crispr_cor[expr_crispr_cor.pc<100].groupby('cols').r2.sum().mean())
     sns.histplot(
         x='r2',
-        data=expr_crispr_cor[expr_crispr_cor.pc<=100].groupby('cols').r2.sum().to_frame()
+        data=expr_crispr_cor[expr_crispr_cor.pc<100].groupby('cols').r2.sum().to_frame()
     )
 
     # %%
     u = xa.concat([
-        cnv_u1.rename('u').to_dataset().assign(
-            src=lambda x: ('pc', ['cnv']*x.sizes['pc']),
-            pc=lambda x: ('pc', ['cnv:'+x for x in x.pc.astype(str).data])
-        ).set_coords('src').u,
-        expr1_u.sel(pc=expr1_u.pc<10).rename('u').to_dataset().assign(
-            src=lambda x: ('pc', ['expr']*x.sizes['pc']),
-            pc=lambda x: ('pc', ['expr:'+x for x in x.pc.astype(str).data])
-        ).set_coords('src').u
-    ], dim='pc')
-    #u = SVD.from_mat(u).u.persist()
+        cnv_svd1.u, 
+        expr1_svd.u.sel(src_pc=expr1_svd.pc<10)
+    ], dim='src_pc')
 
     # %%
     #crispr1 = u @ (crispr[['data']].assign(rows=lambda x: ('rows', np.random.permutation(x.rows.data))).data)
     crispr1 = (u @ crispr.data)
-    crispr1 = crispr1.persist()
+    crispr1 = crispr1.rename('proj').to_dataset().persist()
+
+    crispr1['unproj']= u @ crispr1.proj
+
+    crispr1['coef1'] = (crispr1.proj @ cnv_svd1.vs)
+
+    crispr1['coef2'] = xa.concat([
+        crispr1.coef1 @ x.rename(cols='cnv_cols') 
+        for x in cnv_svd.vs
+    ], dim='cnv_cols')
+
+    crispr1['coef3'] = crispr1.proj @ expr1_svd.vs.rename(cols='expr_cols')
 
     # %% 
     x1 = (crispr1**2).rename('r2').to_dataset().to_dataframe().groupby('cols').r2.sum().to_frame()
+    print(x1.r2.mean())
     sns.histplot(
         x='r2',
         data=x1
     )
 
     # %% 
-    x1 = (crispr1**2).rename('r2').to_dataset().to_dataframe().reset_index().\
+    x1 = (crispr1**2).rename('r2').to_dataset().\
+        to_dataframe().reset_index().\
         groupby(['cols', 'src']).r2.sum().reset_index()
     x1 = x1.pivot_table(index='cols', columns='src', values='r2')
     print(x1.mean())
@@ -1095,6 +1132,25 @@ def _():
         x='cnv', y='expr',
         data=x1
     )
+
+    # %%
+    x1.query('expr>0.1 & cnv>0.4')
+
+    # %%
+    x2 = xa.merge([crispr, crispr1], join='inner')
+    x2 = x2.sel(cols=['ITGAV (3685)']).persist()
+
+    # %%
+    x3 = x2[['data', 'unproj']].to_dataframe()
+    sns.histplot(x='data', data=x3, bins=50)
+    plt.show()
+    sns.scatterplot(x='data', y='unproj', data=x3)
+    plt.show()
+
+    # %%
+    x3 = x2['coef3'].rename('r').to_dataframe()
+    x3['r2'] = x3.r**2
+    x3.sort_values('r2')
 
 # %%
 def _():    
