@@ -994,18 +994,18 @@ def _():
         (a, SVD.from_mat(x.data).inv())
         for a, x in cnv.groupby('arm')
     ]
-    cnv_svd = [
-        xa.merge([x.v.rename('u'), x.us.rename('vs')]).\
+    cnv_svd = {
+        a: xa.merge([x.v.rename('u'), x.us.rename('vs')]).\
         persist().\
         assign(
             arm=lambda x: ('pc', [a]*x.sizes['pc']),
             arm_pc=lambda x: ('pc', a+':'+x.pc.astype(str).to_series())
         ).set_coords('arm').swap_dims(pc='arm_pc') 
         for a, x in cnv_svd
-    ]
+    }
     cnv_svd = namespace(
-        u=xa.concat([x.u for x in cnv_svd], dim='arm_pc'),
-        vs=[x.vs for x in cnv_svd]
+        u=xa.concat([x.u for x in cnv_svd.values()], dim='arm_pc'),
+        vs={a: x.vs for a, x in cnv_svd.items()}
     )
 
     # %%
@@ -1110,11 +1110,12 @@ def _():
 
     crispr1['coef2'] = xa.concat([
         crispr1.coef1 @ x.rename(cols='cnv_cols') 
-        for x in cnv_svd.vs
+        for x in cnv_svd.vs.values()
     ], dim='cnv_cols')
 
     crispr1['coef3'] = crispr1.proj @ expr1_svd.vs.rename(cols='expr_cols')
 
+    crispr1 = xa.merge([crispr, crispr1], join='inner')
 
     # %% 
     x1 = (crispr1.proj**2).rename('r2').to_dataset().\
@@ -1122,17 +1123,25 @@ def _():
         groupby(['cols', 'src']).r2.sum().reset_index()
     x1 = x1.pivot_table(index='cols', columns='src', values='r2')
     print(x1.mean())
-    sns.scatterplot(
-        x='cnv', y='expr',
-        data=x1
+    print(
+        p9.ggplot(x1)+
+            p9.aes('cnv', 'expr')+
+            p9.geom_point(alpha=0.1, size=2)+
+            p9.geom_hline(yintercept=0.20)+
+            p9.geom_vline(xintercept=0.35)
     )
+
+    import sklearn.metrics as sklm
+    print(
+        sklm.confusion_matrix(x1.cnv>0.35, x1.expr>0.20)
+    )
+
 
     # %%
     x1.query('expr>0.3 & cnv>0.4')
 
-    # %%
-    x2 = xa.merge([crispr, crispr1], join='inner')
-    x2 = x2.sel(cols=['MDM2 (4193)']).persist()
+    # %%    
+    x2 = crispr1.sel(cols=['IRF4 (3662)']).persist()
 
     # %%
     sns.scatterplot(
@@ -1140,10 +1149,24 @@ def _():
         data=x2[['data', 'unproj']].to_dataframe()
     )
 
+    # %%    
+    x3 = (x2.coef2 @ cnv.data.rename(cols='cnv_cols'))
+    x3 = x3 + (x2.coef3 @ expr.data.rename(cols='expr_cols'))
+    x3 = xa.merge([x2[['data', 'unproj']], x3.rename('pred')])
+    x3 = x3.to_dataframe()
+    sns.scatterplot(
+        x='unproj', y='pred', 
+        data=x3
+    )
+
     # %%
+    from scipy.stats import entropy
     x2['coef1'].rename('r').to_dataframe().assign(
-        r2=lambda x: x.r**2
-    ).sort_values('r2').tail(10)
+        r2=lambda x: x.r**2/(x.r**2).sum()
+    ).r2.sort_values().\
+        pipe(lambda x: np.exp(entropy(x)))
+        #plot(kind='bar')
+        #tail(10)    
 
     # %%
     x2['coef2'].rename('r').to_dataframe().assign(
@@ -1155,15 +1178,7 @@ def _():
         r2=lambda x: x.r**2
     ).sort_values('r2').tail(10)
 
-    # %%    
-    x3 = (x2.coef2 @ cnv.data.rename(cols='cnv_cols'))
-    x3 = x3 + (x2.coef3 @ expr.data.rename(cols='expr_cols'))
-    x3 = xa.merge([x2[['data', 'unproj']], x3.rename('pred')])
-    x3 = x3.to_dataframe()
-    sns.scatterplot(
-        x='unproj', y='pred', 
-        data=x3
-    )
+
 
 # %%
 def _():    
