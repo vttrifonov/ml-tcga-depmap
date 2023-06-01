@@ -1,6 +1,7 @@
 # %%
 import matplotlib.pyplot as plt
 import seaborn as sns
+import plotnine as p9
 from common.dir import cached_property, Dir
 from common.defs import lazy_property
 from types import SimpleNamespace as namespace
@@ -1095,17 +1096,17 @@ def _():
     # %%
     u = xa.concat([
         cnv_svd1.u, 
-        expr1_svd.u.sel(src_pc=expr1_svd.pc<10)
+        expr1_svd.u.sel(src_pc=expr1_svd.pc<100)
     ], dim='src_pc')
 
     # %%
     #crispr1 = u @ (crispr[['data']].assign(rows=lambda x: ('rows', np.random.permutation(x.rows.data))).data)
-    crispr1 = (u @ crispr.data)
+    crispr1 = u @ crispr.data
     crispr1 = crispr1.rename('proj').to_dataset().persist()
 
     crispr1['unproj']= u @ crispr1.proj
 
-    crispr1['coef1'] = (crispr1.proj @ cnv_svd1.vs)
+    crispr1['coef1'] = crispr1.proj @ cnv_svd1.vs
 
     crispr1['coef2'] = xa.concat([
         crispr1.coef1 @ x.rename(cols='cnv_cols') 
@@ -1114,16 +1115,9 @@ def _():
 
     crispr1['coef3'] = crispr1.proj @ expr1_svd.vs.rename(cols='expr_cols')
 
-    # %% 
-    x1 = (crispr1**2).rename('r2').to_dataset().to_dataframe().groupby('cols').r2.sum().to_frame()
-    print(x1.r2.mean())
-    sns.histplot(
-        x='r2',
-        data=x1
-    )
 
     # %% 
-    x1 = (crispr1**2).rename('r2').to_dataset().\
+    x1 = (crispr1.proj**2).rename('r2').to_dataset().\
         to_dataframe().reset_index().\
         groupby(['cols', 'src']).r2.sum().reset_index()
     x1 = x1.pivot_table(index='cols', columns='src', values='r2')
@@ -1134,23 +1128,42 @@ def _():
     )
 
     # %%
-    x1.query('expr>0.1 & cnv>0.4')
+    x1.query('expr>0.3 & cnv>0.4')
 
     # %%
     x2 = xa.merge([crispr, crispr1], join='inner')
-    x2 = x2.sel(cols=['ITGAV (3685)']).persist()
+    x2 = x2.sel(cols=['MDM2 (4193)']).persist()
 
     # %%
-    x3 = x2[['data', 'unproj']].to_dataframe()
-    sns.histplot(x='data', data=x3, bins=50)
-    plt.show()
-    sns.scatterplot(x='data', y='unproj', data=x3)
-    plt.show()
+    sns.scatterplot(
+        x='data', y='unproj', 
+        data=x2[['data', 'unproj']].to_dataframe()
+    )
 
     # %%
-    x3 = x2['coef3'].rename('r').to_dataframe()
-    x3['r2'] = x3.r**2
-    x3.sort_values('r2')
+    x2['coef1'].rename('r').to_dataframe().assign(
+        r2=lambda x: x.r**2
+    ).sort_values('r2').tail(10)
+
+    # %%
+    x2['coef2'].rename('r').to_dataframe().assign(
+        r2=lambda x: x.r**2
+    ).sort_values('r2').tail(10)
+
+    # %%
+    x2['coef3'].rename('r').to_dataframe().assign(
+        r2=lambda x: x.r**2
+    ).sort_values('r2').tail(10)
+
+    # %%    
+    x3 = (x2.coef2 @ cnv.data.rename(cols='cnv_cols'))
+    x3 = x3 + (x2.coef3 @ expr.data.rename(cols='expr_cols'))
+    x3 = xa.merge([x2[['data', 'unproj']], x3.rename('pred')])
+    x3 = x3.to_dataframe()
+    sns.scatterplot(
+        x='unproj', y='pred', 
+        data=x3
+    )
 
 # %%
 def _():    
