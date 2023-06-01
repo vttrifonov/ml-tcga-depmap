@@ -971,21 +971,31 @@ def _():
         cnv_loc = ((m.crispr_cnv_fit.r2[1:,:]>2).sum(axis=0)>2).values
     )).value_counts().sort_index()#.reset_index().pivot(index='loc', columns='glob')
 
+
+# %%
+def _normalize(x, permute=False):
+    x = x/np.sqrt((x**2).sum(dim='rows'))
+    if permute:
+        x = x.rename('x').to_dataset().\
+            assign(rows=lambda x: ('rows', np.random.permutation(x.rows.data))).x
+    return x
+
 # %%
 def _():    
     pass    
 
     # %%
-    self = _playground11('full', 1)
+
+    self = _playground11('20230531/0.8', 0.8)
 
     # %%
     crispr = self.crispr.copy()
-    crispr['data'] = crispr.data/np.sqrt((crispr.data**2).sum(dim='rows'))
-    crispr['data'] = crispr.data.persist()    
+    #crispr['data'] = crispr.data/np.sqrt((crispr.data**2).sum(dim='rows'))
+    #crispr['data'] = crispr.data.persist()    
 
     expr = self.dm_expr.copy()
-    expr['data'] = expr.data/np.sqrt((expr.data**2).sum(dim='rows'))
-    expr['data'] = expr.data.persist()
+    #expr['data'] = expr.data/np.sqrt((expr.data**2).sum(dim='rows'))
+    #expr['data'] = expr.data.persist()
 
     cnv = self.dm_cnv.copy()
 
@@ -1009,40 +1019,23 @@ def _():
     )
 
     # %%
-    cnv_cor = cnv_svd.u @ expr.data
-    cnv_cor['col_arm'] = cnv.arm
-    cnv_cor = (cnv_cor**2).sel(arm_pc=cnv_cor.pc<5).compute().rename('r2')
-    cnv_cor = cnv_cor.to_dataframe().sort_values('r2')
-    cnv_cor['f'] = cnv_cor.arm==cnv_cor.col_arm
-    sns.boxplot(
-        x='f',
-        y='r2',
-        data=cnv_cor[cnv_cor.pc==0]
-    )
+    def cnv_cor_plot(x, permute=False):
+        cnv_cor = cnv_svd.u @ _normalize(x, permute)
+        cnv_cor['col_arm'] = cnv.arm
+        cnv_cor = (cnv_cor**2).sel(arm_pc=cnv_cor.pc<5).compute().rename('r2')
+        cnv_cor = cnv_cor.to_dataframe().sort_values('r2')
+        cnv_cor['f'] = cnv_cor.arm==cnv_cor.col_arm
+        sns.boxplot(
+            x='f',
+            y='r2',
+            data=cnv_cor[cnv_cor.pc==0]
+        )
+    
+    # %%
+    cnv_cor_plot(expr.data)
 
     # %%
-    cnv_cor = cnv_svd.u @ crispr.data
-    cnv_cor['col_arm'] = cnv.arm
-    cnv_cor = (cnv_cor**2).sel(arm_pc=cnv_cor.pc<5).compute().rename('r2')
-    cnv_cor = cnv_cor.to_dataframe().sort_values('r2')
-    cnv_cor['f'] = cnv_cor.arm==cnv_cor.col_arm
-    sns.boxplot(
-        x='f',
-        y='r2',
-        data=cnv_cor[cnv_cor.pc==0]
-    )
-
-    # %%
-    cnv_u2 = SVD.from_mat(cnv.data).u.persist()    
-
-    x1 = cnv_svd.u.sel(arm_pc=cnv_svd.u.pc<5).rename(pc='pc1')
-    x2 = cnv_u2.sel(pc=cnv_u2.pc<300).rename(pc='pc2')
-    #2 = x2.to_dataset().assign(rows=lambda x: ('rows', np.random.permutation(x.rows.data))).u
-    x3 = (x1 @ x2).persist()
-    x3 = x3.to_dataframe().reset_index()
-    x3.sort_values('u').query('pc2==0')
-    x3.groupby('pc2').u.aggregate(lambda x: ((np.abs(x))>0.1).sum()).\
-        sort_values().reset_index().query('u>5').shape
+    cnv_cor_plot(crispr.data)
     
     # %%
     cnv_svd1 = cnv_svd.u.sel(arm_pc=cnv_svd.u.pc<5)
@@ -1053,28 +1046,27 @@ def _():
         src_pc=lambda x: ('pc', ['cnv:'+x for x in x.pc.astype(str).data]),
     ).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
 
+    # %%
+    def cnv_cor_plot1(x, permute=False):
+        cnv_cor = cnv_svd1.u @ _normalize(x, permute)
+        cnv_cor = (cnv_cor**2).rename('r2').to_dataframe().reset_index()
+        cnv_cor = cnv_cor.groupby('cols').r2.sum()
+        print(cnv_cor.mean())
+        sns.histplot(
+            x='r2',
+            data=cnv_cor.to_frame()
+        )
+        plt.show()
+
     # %%    
-    #cnv_expr_cor = cnv_svd1.u @ (expr[['data']].assign(rows=lambda x: ('rows', np.random.permutation(x.rows.data))).data)
-    cnv_expr_cor = cnv_svd1.u @ expr.data
-    cnv_expr_cor = (cnv_expr_cor**2).rename('r2').to_dataframe().reset_index()
-    print(cnv_expr_cor.groupby('cols').r2.sum().mean())
-    sns.histplot(
-        x='r2',
-        data=cnv_expr_cor.groupby('cols').r2.sum().to_frame()
-    )
+    cnv_cor_plot1(expr.data, permute=False)
 
     # %%
-    #cnv_crispr_cor = cnv_svd1.u @ (crispr[['data']].assign(rows=lambda x: ('rows', np.random.permutation(x.rows.data))).data)
-    cnv_crispr_cor = cnv_svd1.u @ crispr.data
-    cnv_crispr_cor = (cnv_crispr_cor**2).rename('r2').to_dataframe().reset_index()
-    print(cnv_crispr_cor.groupby('cols').r2.sum().mean())
-    sns.histplot(
-        x='r2',
-        data=cnv_crispr_cor.groupby('cols').r2.sum().to_frame()
-    )
+    cnv_cor_plot1(crispr.data, permute=False)
 
     # %%
-    expr1_svd = expr.data - cnv_svd1.u @ (cnv_svd1.u @ expr.data)
+    x = _normalize(expr.data).persist()
+    expr1_svd = x - cnv_svd1.u @ (cnv_svd1.u @ x)
     expr1_svd = SVD.from_mat(expr1_svd).inv()
     expr1_svd = xa.merge([expr1_svd.v.rename('u'), expr1_svd.us.rename('vs')]).persist()
     expr1_svd = expr1_svd.assign(
@@ -1082,16 +1074,20 @@ def _():
         src_pc=lambda x: ('pc', ['expr:'+x for x in x.pc.astype(str).data]),
     ).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
 
+    # %%
+    def expr_cor(x, permute=False):
+        expr_cor = expr1_svd.u @ _normalize(x, permute)
+        expr_cor = (expr_cor**2).rename('r2').to_dataframe().reset_index()
+        expr_cor = expr_cor[expr_cor.pc<100].groupby('cols').r2.sum()
+        print(expr_cor.mean())
+        sns.histplot(
+            x='r2',
+            data=expr_cor.to_frame()
+        )
+        plt.show()
 
     # %%
-    #expr_crispr_cor = expr1_svd.u @ (crispr[['data']].assign(rows=lambda x: ('rows', np.random.permutation(x.rows.data))).data)
-    expr_crispr_cor = expr1_svd.u @ crispr.data
-    expr_crispr_cor = (expr_crispr_cor**2).rename('r2').to_dataframe().reset_index()
-    print(expr_crispr_cor[expr_crispr_cor.pc<100].groupby('cols').r2.sum().mean())
-    sns.histplot(
-        x='r2',
-        data=expr_crispr_cor[expr_crispr_cor.pc<100].groupby('cols').r2.sum().to_frame()
-    )
+    expr_cor(crispr.data, permute=False)
 
     # %%
     u = xa.concat([
@@ -1100,9 +1096,10 @@ def _():
     ], dim='src_pc')
 
     # %%
-    #crispr1 = u @ (crispr[['data']].assign(rows=lambda x: ('rows', np.random.permutation(x.rows.data))).data)
-    crispr1 = u @ crispr.data
-    crispr1 = crispr1.rename('proj').to_dataset().persist()
+    crispr1 = crispr.data.rename('data1').to_dataset()
+    #crispr1['data1'] = _normalize(crispr1.data1, permute=False)
+
+    crispr1['proj'] = u @ crispr1.data1
 
     crispr1['unproj']= u @ crispr1.proj
 
@@ -1118,8 +1115,8 @@ def _():
     crispr1 = xa.merge([crispr, crispr1], join='inner')
 
     # %% 
-    x1 = (crispr1.proj**2).rename('r2').to_dataset().\
-        to_dataframe().reset_index().\
+    x1 = (crispr1.proj**2)/((crispr1.data1**2).sum(dim='rows'))
+    x1 = x1.rename('r2').to_dataframe().reset_index().\
         groupby(['cols', 'src']).r2.sum().reset_index()
     x1 = x1.pivot_table(index='cols', columns='src', values='r2')
     print(x1.mean())
@@ -1127,15 +1124,14 @@ def _():
         p9.ggplot(x1)+
             p9.aes('cnv', 'expr')+
             p9.geom_point(alpha=0.1, size=2)+
-            p9.geom_hline(yintercept=0.20)+
-            p9.geom_vline(xintercept=0.35)
+            p9.geom_hline(yintercept=0.23)+
+            p9.geom_vline(xintercept=0.40)
     )
 
     import sklearn.metrics as sklm
     print(
-        sklm.confusion_matrix(x1.cnv>0.35, x1.expr>0.20)
+        sklm.confusion_matrix(x1.cnv>0.40, x1.expr>0.23)
     )
-
 
     # %%
     x1.query('expr>0.3 & cnv>0.4')
