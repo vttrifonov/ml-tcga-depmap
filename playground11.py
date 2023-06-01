@@ -999,6 +999,13 @@ def _():
 
     cnv = self.dm_cnv.copy()
 
+    expr1 = merge.dm_expr.data.copy().astype('float32')
+    expr1 = (expr1-expr['mean'])/np.sqrt(expr['var'])
+    cnv1 = merge.dm_cnv.data.copy().astype('float32')
+    cnv1 = (cnv1-cnv['mean'])/np.sqrt(cnv['var'])
+    crispr2 = merge.crispr.data.copy().astype('float32')
+    crispr2 = (crispr2-crispr['mean'])/np.sqrt(crispr['var'])
+
     # %%
     cnv_svd = [
         (a, SVD.from_mat(x.data).inv())
@@ -1065,7 +1072,8 @@ def _():
     cnv_cor_plot1(crispr.data, permute=False)
 
     # %%
-    x = _normalize(expr.data).persist()
+    #x = _normalize(expr.data).persist()
+    x = expr.data
     expr1_svd = x - cnv_svd1.u @ (cnv_svd1.u @ x)
     expr1_svd = SVD.from_mat(expr1_svd).inv()
     expr1_svd = xa.merge([expr1_svd.v.rename('u'), expr1_svd.us.rename('vs')]).persist()
@@ -1137,7 +1145,7 @@ def _():
     x1.query('expr>0.3 & cnv>0.4')
 
     # %%    
-    x2 = crispr1.sel(cols=['IRF4 (3662)']).persist()
+    x2 = crispr1.sel(cols=['PAX8 (7849)']).persist()
 
     # %%
     sns.scatterplot(
@@ -1145,14 +1153,16 @@ def _():
         data=x2[['data', 'unproj']].to_dataframe()
     )
 
-    # %%    
-    x3 = (x2.coef2 @ cnv.data.rename(cols='cnv_cols'))
-    x3 = x3 + (x2.coef3 @ expr.data.rename(cols='expr_cols'))
-    x3 = xa.merge([x2[['data', 'unproj']], x3.rename('pred')])
+    # %%        
+    x3 = (x2.coef2 @ cnv1.rename(cols='cnv_cols'))
+    x3 = x3 + (x2.coef3 @ expr1.rename(cols='expr_cols'))
+    x3 = xa.merge([crispr2.rename('data'), x3.rename('pred')], join='inner')
+    x3['train'] = self.train_split.train
     x3 = x3.to_dataframe()
-    sns.scatterplot(
-        x='unproj', y='pred', 
-        data=x3
+    (
+        p9.ggplot(x3)+
+            p9.aes('data', 'pred', color='train')+
+            p9.geom_point()
     )
 
     # %%
