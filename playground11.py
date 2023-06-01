@@ -999,12 +999,9 @@ def _():
 
     cnv = self.dm_cnv.copy()
 
-    expr1 = merge.dm_expr.data.copy().astype('float32')
-    expr1 = (expr1-expr['mean'])/np.sqrt(expr['var'])
-    cnv1 = merge.dm_cnv.data.copy().astype('float32')
-    cnv1 = (cnv1-cnv['mean'])/np.sqrt(cnv['var'])
-    crispr2 = merge.crispr.data.copy().astype('float32')
-    crispr2 = (crispr2-crispr['mean'])/np.sqrt(crispr['var'])
+    expr1 = (merge.dm_expr.data-expr['mean'])/np.sqrt(expr['var'])
+    cnv1 = (merge.dm_cnv.data-cnv['mean'])/np.sqrt(cnv['var'])
+    crispr2 = (merge.crispr.data-crispr['mean'])/np.sqrt(crispr['var'])
 
     # %%
     cnv_svd = [
@@ -1072,9 +1069,7 @@ def _():
     cnv_cor_plot1(crispr.data, permute=False)
 
     # %%
-    #x = _normalize(expr.data).persist()
-    x = expr.data
-    expr1_svd = x - cnv_svd1.u @ (cnv_svd1.u @ x)
+    expr1_svd = expr.data - cnv_svd1.u @ (cnv_svd1.u @ expr.data)
     expr1_svd = SVD.from_mat(expr1_svd).inv()
     expr1_svd = xa.merge([expr1_svd.v.rename('u'), expr1_svd.us.rename('vs')]).persist()
     expr1_svd = expr1_svd.assign(
@@ -1103,13 +1098,15 @@ def _():
         expr1_svd.u.sel(src_pc=expr1_svd.pc<100)
     ], dim='src_pc')
 
-    # %%
-    crispr1 = crispr.data.rename('data1').to_dataset()
+    #crispr1 = crispr.data.rename('data1').to_dataset()
     #crispr1['data1'] = _normalize(crispr1.data1, permute=False)
 
-    crispr1['proj'] = u @ crispr1.data1
+    crispr1 = xa.Dataset()
 
-    crispr1['unproj']= u @ crispr1.proj
+    crispr1['proj'] = (u @ crispr.data.rename(cols='crispr_cols')).persist()
+    crispr1['proj1'] = (cnv_svd1.u @ expr.data.rename(cols='expr_cols')).persist()
+
+    #crispr1['unproj']= u @ crispr1.proj
 
     crispr1['coef1'] = crispr1.proj @ cnv_svd1.vs
 
@@ -1120,13 +1117,28 @@ def _():
 
     crispr1['coef3'] = crispr1.proj @ expr1_svd.vs.rename(cols='expr_cols')
 
-    crispr1 = xa.merge([crispr, crispr1], join='inner')
+    crispr1['coef4'] = crispr1.proj1 @ cnv_svd1.vs
 
-    # %% 
-    x1 = (crispr1.proj**2)/((crispr1.data1**2).sum(dim='rows'))
-    x1 = x1.rename('r2').to_dataframe().reset_index().\
-        groupby(['cols', 'src']).r2.sum().reset_index()
-    x1 = x1.pivot_table(index='cols', columns='src', values='r2')
+    crispr1['coef5'] = xa.concat([
+        crispr1.coef4 @ x.rename(cols='cnv_cols') 
+        for x in cnv_svd.vs.values()
+    ], dim='cnv_cols')
+
+    # %%
+    expr2 = expr1.rename(cols='expr_cols') - crispr1.coef5 @ cnv1.rename(cols='cnv_cols')
+    crispr3 = xa.Dataset()
+    crispr3['cnv_pred'] = crispr1.coef2 @ cnv1.rename(cols='cnv_cols')
+    crispr3['expr_pred'] = crispr1.coef3 @ expr2
+    crispr3['data'] = crispr2.rename(cols='crispr_cols')
+    crispr3['train'] = self.train_split.train
+    crispr3 = crispr3.persist()
+
+    # %%
+    x1 = crispr3.sel(rows=crispr3.train)    
+    x1['cnv'] = (x1.cnv_pred**2).sum(dim='rows')
+    x1['expr'] = (x1.expr_pred**2).sum(dim='rows')
+    x1 = x1[['cnv', 'expr']]/((crispr.data.rename(cols='crispr_cols')**2).sum(dim='rows'))
+    x1 = x1.to_dataframe()
     print(x1.mean())
     print(
         p9.ggplot(x1)+
@@ -1135,34 +1147,24 @@ def _():
             p9.geom_hline(yintercept=0.23)+
             p9.geom_vline(xintercept=0.40)
     )
-
     import sklearn.metrics as sklm
     print(
         sklm.confusion_matrix(x1.cnv>0.40, x1.expr>0.23)
     )
 
+
     # %%
     x1.query('expr>0.3 & cnv>0.4')
 
     # %%    
-    x2 = crispr1.sel(cols=['PAX8 (7849)']).persist()
+    x2 = crispr1.sel(crispr_cols=['PAX8 (7849)']).persist()
+    x2 = xa.merge([x2, crispr3], join='inner')
+    x2['pred'] = x2.cnv_pred + x2.expr_pred
 
     # %%
     sns.scatterplot(
-        x='data', y='unproj', 
-        data=x2[['data', 'unproj']].to_dataframe()
-    )
-
-    # %%        
-    x3 = (x2.coef2 @ cnv1.rename(cols='cnv_cols'))
-    x3 = x3 + (x2.coef3 @ expr1.rename(cols='expr_cols'))
-    x3 = xa.merge([crispr2.rename('data'), x3.rename('pred')], join='inner')
-    x3['train'] = self.train_split.train
-    x3 = x3.to_dataframe()
-    (
-        p9.ggplot(x3)+
-            p9.aes('data', 'pred', color='train')+
-            p9.geom_point()
+        x='data', y='pred', 
+        data=x2[['data', 'pred']].to_dataframe()
     )
 
     # %%
@@ -1183,7 +1185,6 @@ def _():
     x2['coef3'].rename('r').to_dataframe().assign(
         r2=lambda x: x.r**2
     ).sort_values('r2').tail(10)
-
 
 
 # %%
