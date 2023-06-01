@@ -14,3 +14,5 @@ conda install s3fs
 conda install psycopg2
 conda install mysql-connector-python
 conda install sparse
+conda install plotnine==0.8.0
+conda install nbformat
