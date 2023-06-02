@@ -973,12 +973,21 @@ def _():
 
 
 # %%
-def _normalize(x, permute=False):
-    x = x/np.sqrt((x**2).sum(dim='rows'))
-    if permute:
-        x = x.rename('x').to_dataset().\
-            assign(rows=lambda x: ('rows', np.random.permutation(x.rows.data))).x
-    return x
+def _normalize(x):
+    return x/np.sqrt((x**2).sum(dim='rows'))
+
+def _permute(x):
+    return x.rename('x').to_dataset().\
+        assign(rows=lambda x: ('rows', np.random.permutation(x.rows.data))).x
+
+def _scale1(d, rows=['rows']):
+    cols = list(set(d.dims)-set(rows))
+    d['center'] = (cols, d.mean(dim=rows))
+    d = d - d.center
+    d['scale'] = (cols, np.sqrt((d**2).sum(dim=rows)))
+    d = d/d.scale
+    return d
+
 
 # %%
 def _():    
@@ -989,19 +998,22 @@ def _():
     self = _playground11('20230531/0.8', 0.8)
 
     # %%
-    crispr = self.crispr.copy()
-    #crispr['data'] = crispr.data/np.sqrt((crispr.data**2).sum(dim='rows'))
-    #crispr['data'] = crispr.data.persist()    
+    data = xa.merge([
+        merge.dm_expr.rename(data='expr', cols='expr_cols'),
+        merge.dm_cnv.rename(data='cnv', cols='cnv_cols'),
+        merge.crispr.rename(data='crispr', cols='crispr_cols')
+    ], join='inner', compat='override')
+    for x in ['expr', 'cnv', 'crispr']:
+        data[x] = data[x].astype(np.float32)
+    data['train'] = self.train_split.train
 
-    expr = self.dm_expr.copy()
-    #expr['data'] = expr.data/np.sqrt((expr.data**2).sum(dim='rows'))
-    #expr['data'] = expr.data.persist()
-
-    cnv = self.dm_cnv.copy()
-
-    expr1 = (merge.dm_expr.data-expr['mean'])/np.sqrt(expr['var'])
-    cnv1 = (merge.dm_cnv.data-cnv['mean'])/np.sqrt(cnv['var'])
-    crispr2 = (merge.crispr.data-crispr['mean'])/np.sqrt(crispr['var'])
+    # %%
+    train = data.sel(rows=data.train)
+    crispr, expr, cnv = [
+        _scale1(x).persist().rename('data').reset_coords(['center', 'scale'])
+        for x in [train.crispr, train.expr, train.cnv]
+    ]
+    cnv['arm'] = train.arm
 
     # %%
     cnv_svd = [
@@ -1023,9 +1035,9 @@ def _():
     )
 
     # %%
-    def cnv_cor_plot(x, permute=False):
-        cnv_cor = cnv_svd.u @ _normalize(x, permute)
-        cnv_cor['col_arm'] = cnv.arm
+    def cnv_cor_plot(x):
+        cnv_cor = cnv_svd.u @ x
+        cnv_cor['col_arm'] = cnv.arm.rename(cnv_cols='cols')
         cnv_cor = (cnv_cor**2).sel(arm_pc=cnv_cor.pc<5).compute().rename('r2')
         cnv_cor = cnv_cor.to_dataframe().sort_values('r2')
         cnv_cor['f'] = cnv_cor.arm==cnv_cor.col_arm
@@ -1036,10 +1048,10 @@ def _():
         )
     
     # %%
-    cnv_cor_plot(expr.data)
+    cnv_cor_plot(expr.data.rename(expr_cols='cols'))
 
     # %%
-    cnv_cor_plot(crispr.data)
+    cnv_cor_plot(crispr.data.rename(crispr_cols='cols'))
     
     # %%
     cnv_svd1 = cnv_svd.u.sel(arm_pc=cnv_svd.u.pc<5)
@@ -1051,8 +1063,8 @@ def _():
     ).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
 
     # %%
-    def cnv_cor_plot1(x, permute=False):
-        cnv_cor = cnv_svd1.u @ _normalize(x, permute)
+    def cnv_cor_plot1(x):
+        cnv_cor = cnv_svd1.u @ x
         cnv_cor = (cnv_cor**2).rename('r2').to_dataframe().reset_index()
         cnv_cor = cnv_cor.groupby('cols').r2.sum()
         print(cnv_cor.mean())
@@ -1063,10 +1075,10 @@ def _():
         plt.show()
 
     # %%    
-    cnv_cor_plot1(expr.data, permute=False)
+    cnv_cor_plot1(expr.data.rename(expr_cols='cols'))
 
     # %%
-    cnv_cor_plot1(crispr.data, permute=False)
+    cnv_cor_plot1(crispr.data.rename(crispr_cols='cols'))
 
     # %%
     expr1_svd = expr.data - cnv_svd1.u @ (cnv_svd1.u @ expr.data)
@@ -1078,8 +1090,8 @@ def _():
     ).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
 
     # %%
-    def expr_cor(x, permute=False):
-        expr_cor = expr1_svd.u @ _normalize(x, permute)
+    def expr_cor(x):
+        expr_cor = expr1_svd.u @ x
         expr_cor = (expr_cor**2).rename('r2').to_dataframe().reset_index()
         expr_cor = expr_cor[expr_cor.pc<100].groupby('cols').r2.sum()
         print(expr_cor.mean())
@@ -1090,54 +1102,53 @@ def _():
         plt.show()
 
     # %%
-    expr_cor(crispr.data, permute=False)
+    expr_cor(crispr.data.rename(crispr_cols='cols'))
 
-    # %%
+    # %%    
     u = xa.concat([
         cnv_svd1.u, 
         expr1_svd.u.sel(src_pc=expr1_svd.pc<100)
     ], dim='src_pc')
 
-    #crispr1 = crispr.data.rename('data1').to_dataset()
-    #crispr1['data1'] = _normalize(crispr1.data1, permute=False)
-
     crispr1 = xa.Dataset()
 
-    crispr1['proj'] = (u @ crispr.data.rename(cols='crispr_cols')).persist()
-    crispr1['proj1'] = (cnv_svd1.u @ expr.data.rename(cols='expr_cols')).persist()
-
-    #crispr1['unproj']= u @ crispr1.proj
+    crispr1['proj'] = (u @ crispr.data).persist()
+    crispr1['proj1'] = (cnv_svd1.u @ expr.data).persist()
 
     crispr1['coef1'] = crispr1.proj @ cnv_svd1.vs
 
     crispr1['coef2'] = xa.concat([
-        crispr1.coef1 @ x.rename(cols='cnv_cols') 
+        crispr1.coef1 @ x
         for x in cnv_svd.vs.values()
     ], dim='cnv_cols')
 
-    crispr1['coef3'] = crispr1.proj @ expr1_svd.vs.rename(cols='expr_cols')
+    crispr1['coef3'] = crispr1.proj @ expr1_svd.vs
 
     crispr1['coef4'] = crispr1.proj1 @ cnv_svd1.vs
 
     crispr1['coef5'] = xa.concat([
-        crispr1.coef4 @ x.rename(cols='cnv_cols') 
+        crispr1.coef4 @ x
         for x in cnv_svd.vs.values()
     ], dim='cnv_cols')
 
+    # %%    
+    cnv1 = ((data.cnv-cnv.center)/cnv.scale).persist()
+    expr1 = (data.expr-expr.center)/expr.scale
+    expr1 = (expr1 - crispr1.coef5 @ cnv1).persist()
+
     # %%
-    expr2 = expr1.rename(cols='expr_cols') - crispr1.coef5 @ cnv1.rename(cols='cnv_cols')
     crispr3 = xa.Dataset()
-    crispr3['cnv_pred'] = crispr1.coef2 @ cnv1.rename(cols='cnv_cols')
-    crispr3['expr_pred'] = crispr1.coef3 @ expr2
-    crispr3['data'] = crispr2.rename(cols='crispr_cols')
-    crispr3['train'] = self.train_split.train
+    crispr3['cnv'] = crispr1.coef2 @ cnv1
+    crispr3['expr'] = crispr1.coef3 @ expr1
+    crispr3['pred'] = crispr.scale * (crispr3.cnv + crispr3.expr) + crispr.center
+    crispr3['data'] = data.crispr
+    crispr3['train'] = data.train
     crispr3 = crispr3.persist()
 
     # %%
-    x1 = crispr3.sel(rows=crispr3.train)    
-    x1['cnv'] = (x1.cnv_pred**2).sum(dim='rows')
-    x1['expr'] = (x1.expr_pred**2).sum(dim='rows')
-    x1 = x1[['cnv', 'expr']]/((crispr.data.rename(cols='crispr_cols')**2).sum(dim='rows'))
+    x1 = crispr3.sel(rows=crispr3.train)[['cnv', 'expr']]
+    x1 = (x1**2).sum(dim='rows')
+    x1 = x1/((crispr.data**2).sum(dim='rows'))
     x1 = x1.to_dataframe()
     print(x1.mean())
     print(
@@ -1152,20 +1163,47 @@ def _():
         sklm.confusion_matrix(x1.cnv>0.40, x1.expr>0.23)
     )
 
-
     # %%
     x1.query('expr>0.3 & cnv>0.4')
 
-    # %%    
-    x2 = crispr1.sel(crispr_cols=['PAX8 (7849)']).persist()
-    x2 = xa.merge([x2, crispr3], join='inner')
-    x2['pred'] = x2.cnv_pred + x2.expr_pred
+    # %%
+    x1 = crispr3[['pred', 'data', 'train']]
+    x1 = x1.groupby('train').apply(
+        lambda x: x[['pred', 'data']].\
+            pipe(lambda x: x-x.mean(dim='rows')).\
+            pipe(lambda x: x/np.sqrt((x**2).sum(dim='rows'))).\
+            pipe(lambda x: (x.pred * x.data).sum(dim='rows'))
+    ).rename('cor')
+    x1 = x1.to_dataframe()
+    x1 = x1.reset_index().pivot_table(
+        index='crispr_cols', columns='train', values='cor'
+    )
+    x1.columns = x1.columns.astype(str)
+    print(
+        p9.ggplot(x1)+
+            p9.aes('False', 'True')+
+            p9.geom_point(alpha=0.1, size=2)
+    )
 
     # %%
-    sns.scatterplot(
-        x='data', y='pred', 
-        data=x2[['data', 'pred']].to_dataframe()
+    x1.sort_values('False')
+
+    # %%    
+    x2 = crispr1.sel(crispr_cols=['ZFYVE16 (9765)']).persist()
+    x2 = xa.merge([x2, crispr3], join='inner')
+
+    # %%
+    x3 = x2[['data', 'pred', 'train']].to_dataframe()
+    print(
+        p9.ggplot(x3)+            
+            p9.aes('data', 'pred', color='train')+
+            p9.geom_point()+
+            p9.geom_smooth(method='lm')
     )
+    print(
+        x3.groupby('train').aggregate(lambda x: x.loc[:, ['data', 'pred']].corr().iloc[0,1])
+    )
+
 
     # %%
     from scipy.stats import entropy
