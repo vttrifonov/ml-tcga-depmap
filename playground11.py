@@ -20,6 +20,7 @@ import dask
 from helpers import config
 from svd import SVD
 from merge import merge
+from common.caching import compose, lazy
 
 # %%
 
@@ -988,7 +989,6 @@ def _scale1(d, rows=['rows']):
     d = d/d.scale
     return d
 
-
 # %%
 def _():    
     pass    
@@ -1003,152 +1003,175 @@ def _():
         merge.dm_cnv.rename(data='cnv', cols='cnv_cols'),
         merge.crispr.rename(data='crispr', cols='crispr_cols')
     ], join='inner', compat='override')
+    data = data.set_coords('arm')
     for x in ['expr', 'cnv', 'crispr']:
         data[x] = data[x].astype(np.float32)
     data['train'] = self.train_split.train
 
     # %%
+    class Model1:
+        def fit(self, train):
+            crispr, expr, cnv = [
+                _scale1(x).persist().rename('data').reset_coords(['center', 'scale'])
+                for x in [train.crispr, train.expr, train.cnv]
+            ]
+
+            cnv_svd = [
+                (a, SVD.from_mat(x.data).inv())
+                for a, x in cnv.groupby('arm')
+            ]
+            cnv_svd = {
+                a: xa.merge([x.v.rename('u'), x.us.rename('vs')]).\
+                persist().\
+                assign(
+                    arm=lambda x: ('pc', [a]*x.sizes['pc']),
+                    arm_pc=lambda x: ('pc', a+':'+x.pc.astype(str).to_series())
+                ).set_coords('arm').swap_dims(pc='arm_pc') 
+                for a, x in cnv_svd
+            }
+            cnv_svd = namespace(
+                u=xa.concat([x.u for x in cnv_svd.values()], dim='arm_pc'),
+                vs={a: x.vs for a, x in cnv_svd.items()}
+            )
+            self.cnv_svd = cnv_svd
+        
+            cnv_svd1 = cnv_svd.u.sel(arm_pc=cnv_svd.u.pc<5)
+            cnv_svd1 = SVD.from_mat(cnv_svd1).inv()
+            cnv_svd1 = xa.merge([cnv_svd1.v.rename('u'), cnv_svd1.us.rename('vs')]).persist()
+            cnv_svd1 = cnv_svd1.assign(
+                src=lambda x: ('pc', ['cnv']*x.sizes['pc']),
+                src_pc=lambda x: ('pc', ['cnv:'+x for x in x.pc.astype(str).data]),
+            ).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
+            self.cnv_svd1 = cnv_svd1
+
+            expr1_svd = expr.data - cnv_svd1.u @ (cnv_svd1.u @ expr.data)
+            expr1_svd = SVD.from_mat(expr1_svd).inv()
+            expr1_svd = xa.merge([expr1_svd.v.rename('u'), expr1_svd.us.rename('vs')]).persist()
+            expr1_svd = expr1_svd.assign(
+                src=lambda x: ('pc', ['expr']*x.sizes['pc']),
+                src_pc=lambda x: ('pc', ['expr:'+x for x in x.pc.astype(str).data]),
+            ).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
+            self.expr1_svd = expr1_svd
+
+            u = xa.concat([
+                cnv_svd1.u, 
+                expr1_svd.u.sel(src_pc=expr1_svd.pc<100)
+            ], dim='src_pc')
+
+            self.proj = (u @ crispr.data).persist()
+            self.proj1 = (cnv_svd1.u @ expr.data).persist()
+
+            self.expr = expr.drop('data')
+            self.cnv = cnv.drop('data')
+            self.crispr = crispr.drop('data')
+
+        @compose(property, lazy)
+        def coef(self):                
+            coef1 = self.proj @ self.cnv_svd1.vs
+
+            coef2 = xa.concat([
+                coef1 @ x
+                for x in self.cnv_svd.vs.values()
+            ], dim='cnv_cols')
+
+            coef3 = self.proj @ self.expr1_svd.vs
+
+            coef4 = self.proj1 @ self.cnv_svd1.vs
+
+            coef5 = xa.concat([
+                coef4 @ x
+                for x in self.cnv_svd.vs.values()
+            ], dim='cnv_cols')
+
+            return (coef1, coef2, coef3, coef4, coef5)
+
+        def cnv_cor_plot(self, x):
+            cnv_cor = self.cnv_svd.u @ _scale1(x)
+            cnv_cor['col_arm'] = self.cnv.arm.rename(cnv_cols='cols').drop('arm')
+            cnv_cor = (cnv_cor**2).sel(arm_pc=cnv_cor.pc<5).compute().rename('r2')
+            cnv_cor = cnv_cor.to_dataframe().sort_values('r2')
+            cnv_cor['f'] = cnv_cor.arm==cnv_cor.col_arm
+            sns.boxplot(
+                x='f',
+                y='r2',
+                data=cnv_cor[cnv_cor.pc==0]
+            )
+
+        def cnv_cor_plot1(self, x):
+            cnv_cor = self.cnv_svd1.u @ _scale1(x)
+            cnv_cor = (cnv_cor**2).rename('r2').to_dataframe().reset_index()
+            cnv_cor = cnv_cor.groupby('cols').r2.sum()
+            print(cnv_cor.mean())
+            sns.histplot(
+                x='r2',
+                data=cnv_cor.to_frame()
+            )
+            plt.show()
+
+        def expr_cor(self, x):
+            expr_cor = self.expr1_svd.u @ _scale1(x)
+            expr_cor = (expr_cor**2).rename('r2').to_dataframe().reset_index()
+            expr_cor = expr_cor[expr_cor.pc<100].groupby('cols').r2.sum()
+            print(expr_cor.mean())
+            sns.histplot(
+                x='r2',
+                data=expr_cor.to_frame()
+            )
+            plt.show()
+        
+        def predict(self, test):
+            cnv1 = ((test.cnv-self.cnv.center)/self.cnv.scale).persist()
+            expr1 = (test.expr-self.expr.center)/self.expr.scale
+            expr1 = (expr1 - self.coef[4] @ cnv1).persist()
+
+            crispr3 = xa.Dataset()
+            crispr3['cnv'] = self.coef[1] @ cnv1
+            crispr3['expr'] = self.coef[2] @ expr1
+            crispr3['pred'] = self.crispr.scale * (crispr3.cnv + crispr3.expr) + self.crispr.center
+            return crispr3
+
+    # %%
     train = data.sel(rows=data.train)
-    crispr, expr, cnv = [
-        _scale1(x).persist().rename('data').reset_coords(['center', 'scale'])
-        for x in [train.crispr, train.expr, train.cnv]
-    ]
-    cnv['arm'] = train.arm
 
     # %%
-    cnv_svd = [
-        (a, SVD.from_mat(x.data).inv())
-        for a, x in cnv.groupby('arm')
-    ]
-    cnv_svd = {
-        a: xa.merge([x.v.rename('u'), x.us.rename('vs')]).\
-        persist().\
-        assign(
-            arm=lambda x: ('pc', [a]*x.sizes['pc']),
-            arm_pc=lambda x: ('pc', a+':'+x.pc.astype(str).to_series())
-        ).set_coords('arm').swap_dims(pc='arm_pc') 
-        for a, x in cnv_svd
-    }
-    cnv_svd = namespace(
-        u=xa.concat([x.u for x in cnv_svd.values()], dim='arm_pc'),
-        vs={a: x.vs for a, x in cnv_svd.items()}
-    )
+    self = Model1()    
+    self.fit(train)
 
     # %%
-    def cnv_cor_plot(x):
-        cnv_cor = cnv_svd.u @ x
-        cnv_cor['col_arm'] = cnv.arm.rename(cnv_cols='cols')
-        cnv_cor = (cnv_cor**2).sel(arm_pc=cnv_cor.pc<5).compute().rename('r2')
-        cnv_cor = cnv_cor.to_dataframe().sort_values('r2')
-        cnv_cor['f'] = cnv_cor.arm==cnv_cor.col_arm
-        sns.boxplot(
-            x='f',
-            y='r2',
-            data=cnv_cor[cnv_cor.pc==0]
-        )
-    
-    # %%
-    cnv_cor_plot(expr.data.rename(expr_cols='cols'))
+    self.cnv_cor_plot(train.expr.rename(expr_cols='cols'))
 
     # %%
-    cnv_cor_plot(crispr.data.rename(crispr_cols='cols'))
-    
-    # %%
-    cnv_svd1 = cnv_svd.u.sel(arm_pc=cnv_svd.u.pc<5)
-    cnv_svd1 = SVD.from_mat(cnv_svd1).inv()
-    cnv_svd1 = xa.merge([cnv_svd1.v.rename('u'), cnv_svd1.us.rename('vs')]).persist()
-    cnv_svd1 = cnv_svd1.assign(
-        src=lambda x: ('pc', ['cnv']*x.sizes['pc']),
-        src_pc=lambda x: ('pc', ['cnv:'+x for x in x.pc.astype(str).data]),
-    ).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
-
-    # %%
-    def cnv_cor_plot1(x):
-        cnv_cor = cnv_svd1.u @ x
-        cnv_cor = (cnv_cor**2).rename('r2').to_dataframe().reset_index()
-        cnv_cor = cnv_cor.groupby('cols').r2.sum()
-        print(cnv_cor.mean())
-        sns.histplot(
-            x='r2',
-            data=cnv_cor.to_frame()
-        )
-        plt.show()
+    self.cnv_cor_plot(train.crispr.rename(crispr_cols='cols'))
 
     # %%    
-    cnv_cor_plot1(expr.data.rename(expr_cols='cols'))
+    self.cnv_cor_plot1(train.expr.rename(expr_cols='cols'))
 
     # %%
-    cnv_cor_plot1(crispr.data.rename(crispr_cols='cols'))
+    self.cnv_cor_plot1(train.crispr.rename(crispr_cols='cols'))
 
     # %%
-    expr1_svd = expr.data - cnv_svd1.u @ (cnv_svd1.u @ expr.data)
-    expr1_svd = SVD.from_mat(expr1_svd).inv()
-    expr1_svd = xa.merge([expr1_svd.v.rename('u'), expr1_svd.us.rename('vs')]).persist()
-    expr1_svd = expr1_svd.assign(
-        src=lambda x: ('pc', ['expr']*x.sizes['pc']),
-        src_pc=lambda x: ('pc', ['expr:'+x for x in x.pc.astype(str).data]),
-    ).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
+    self.expr_cor(train.crispr.rename(crispr_cols='cols'))
 
     # %%
-    def expr_cor(x):
-        expr_cor = expr1_svd.u @ x
-        expr_cor = (expr_cor**2).rename('r2').to_dataframe().reset_index()
-        expr_cor = expr_cor[expr_cor.pc<100].groupby('cols').r2.sum()
-        print(expr_cor.mean())
-        sns.histplot(
-            x='r2',
-            data=expr_cor.to_frame()
-        )
-        plt.show()
+    crispr1 = xa.merge([
+        self.proj.rename('proj'),
+        self.proj1.rename('proj1'),
+        self.coef[0].rename('coef1'),
+        self.coef[1].rename('coef2'),
+        self.coef[2].rename('coef3'),
+        self.coef[3].rename('coef4'),
+        self.coef[4].rename('coef5')
+    ], join='inner')
 
     # %%
-    expr_cor(crispr.data.rename(crispr_cols='cols'))
-
-    # %%    
-    u = xa.concat([
-        cnv_svd1.u, 
-        expr1_svd.u.sel(src_pc=expr1_svd.pc<100)
-    ], dim='src_pc')
-
-    crispr1 = xa.Dataset()
-
-    crispr1['proj'] = (u @ crispr.data).persist()
-    crispr1['proj1'] = (cnv_svd1.u @ expr.data).persist()
-
-    crispr1['coef1'] = crispr1.proj @ cnv_svd1.vs
-
-    crispr1['coef2'] = xa.concat([
-        crispr1.coef1 @ x
-        for x in cnv_svd.vs.values()
-    ], dim='cnv_cols')
-
-    crispr1['coef3'] = crispr1.proj @ expr1_svd.vs
-
-    crispr1['coef4'] = crispr1.proj1 @ cnv_svd1.vs
-
-    crispr1['coef5'] = xa.concat([
-        crispr1.coef4 @ x
-        for x in cnv_svd.vs.values()
-    ], dim='cnv_cols')
-
-    # %%    
-    cnv1 = ((data.cnv-cnv.center)/cnv.scale).persist()
-    expr1 = (data.expr-expr.center)/expr.scale
-    expr1 = (expr1 - crispr1.coef5 @ cnv1).persist()
-
-    # %%
-    crispr3 = xa.Dataset()
-    crispr3['cnv'] = crispr1.coef2 @ cnv1
-    crispr3['expr'] = crispr1.coef3 @ expr1
-    crispr3['pred'] = crispr.scale * (crispr3.cnv + crispr3.expr) + crispr.center
+    crispr3 = self.predict(data)
     crispr3['data'] = data.crispr
     crispr3['train'] = data.train
     crispr3 = crispr3.persist()
-
+    
     # %%
     x1 = crispr3.sel(rows=crispr3.train)[['cnv', 'expr']]
     x1 = (x1**2).sum(dim='rows')
-    x1 = x1/((crispr.data**2).sum(dim='rows'))
     x1 = x1.to_dataframe()
     print(x1.mean())
     print(
