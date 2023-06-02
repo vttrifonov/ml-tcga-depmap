@@ -1022,6 +1022,7 @@ def _():
             ]
             cnv_svd = {
                 a: xa.merge([x.v.rename('u'), x.us.rename('vs')]).\
+                pipe(lambda x: x.sel(pc=range(5))).\
                 persist().\
                 assign(
                     arm=lambda x: ('pc', [a]*x.sizes['pc']),
@@ -1035,8 +1036,7 @@ def _():
             )
             self.cnv_svd = cnv_svd
         
-            cnv_svd1 = cnv_svd.u.sel(arm_pc=cnv_svd.u.pc<5)
-            cnv_svd1 = SVD.from_mat(cnv_svd1).inv()
+            cnv_svd1 = SVD.from_mat(cnv_svd.u).inv()
             cnv_svd1 = xa.merge([cnv_svd1.v.rename('u'), cnv_svd1.us.rename('vs')]).persist()
             cnv_svd1 = cnv_svd1.assign(
                 src=lambda x: ('pc', ['cnv']*x.sizes['pc']),
@@ -1047,16 +1047,14 @@ def _():
             expr1_svd = expr.data - cnv_svd1.u @ (cnv_svd1.u @ expr.data)
             expr1_svd = SVD.from_mat(expr1_svd).inv()
             expr1_svd = xa.merge([expr1_svd.v.rename('u'), expr1_svd.us.rename('vs')]).persist()
+            expr1_svd = expr1_svd.sel(pc=range(100))
             expr1_svd = expr1_svd.assign(
                 src=lambda x: ('pc', ['expr']*x.sizes['pc']),
                 src_pc=lambda x: ('pc', ['expr:'+x for x in x.pc.astype(str).data]),
             ).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
             self.expr1_svd = expr1_svd
 
-            u = xa.concat([
-                cnv_svd1.u, 
-                expr1_svd.u.sel(src_pc=expr1_svd.pc<100)
-            ], dim='src_pc')
+            u = xa.concat([cnv_svd1.u, expr1_svd.u], dim='src_pc')
 
             self.proj = (u @ crispr.data).persist()
             self.proj1 = (cnv_svd1.u @ expr.data).persist()
@@ -1088,7 +1086,7 @@ def _():
         def cnv_cor_plot(self, x):
             cnv_cor = self.cnv_svd.u @ _scale1(x)
             cnv_cor['col_arm'] = self.cnv.arm.rename(cnv_cols='cols').drop('arm')
-            cnv_cor = (cnv_cor**2).sel(arm_pc=cnv_cor.pc<5).compute().rename('r2')
+            cnv_cor = (cnv_cor**2).compute().rename('r2')
             cnv_cor = cnv_cor.to_dataframe().sort_values('r2')
             cnv_cor['f'] = cnv_cor.arm==cnv_cor.col_arm
             sns.boxplot(
@@ -1111,7 +1109,7 @@ def _():
         def expr_cor(self, x):
             expr_cor = self.expr1_svd.u @ _scale1(x)
             expr_cor = (expr_cor**2).rename('r2').to_dataframe().reset_index()
-            expr_cor = expr_cor[expr_cor.pc<100].groupby('cols').r2.sum()
+            expr_cor = expr_cor.groupby('cols').r2.sum()
             print(expr_cor.mean())
             sns.histplot(
                 x='r2',
