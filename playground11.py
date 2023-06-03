@@ -20,7 +20,9 @@ import dask
 from helpers import config
 from svd import SVD
 from merge import merge
-from common.caching import compose, lazy
+from common.caching import compose, lazy, XArrayCache
+
+storage = config.cache/'playground11'
 
 # %%
 
@@ -990,11 +992,61 @@ def _scale1(d, rows=['rows']):
     return d
 
 # %%
+from common.caching import FileCache
+
+class DictCache(FileCache):
+    def __init__(self, *default, **elem):
+        super().__init__(True, '')
+        self.default = default[0] if len(default)>0 else None
+        self.elem = elem
+
+    def store(self, data, storage):
+        for k, v in data.items():
+            s = self.elem.get(k, self.default)
+            if s is not None:
+                s.store(v, storage/str(k))
+
+    def restore(self, storage):
+        data = {}
+        for k in storage.glob('*'):
+            k = k.name
+            s = self.elem.get(k, self.default)
+            if s is not None:
+                data[k] = s.restore(storage/k)
+        return data
+
+class ArrayCache(FileCache):
+    def __init__(self, elem):
+        super().__init__(True, ext='')
+        self.elem = elem
+
+    def store(self, data, storage):
+        for i, v in enumerate(data):
+            self.elem.store(v, storage/str(i))
+
+    def restore(self, storage):
+        i = [int(x.name) for x in storage.glob('*')]
+        return [
+            self.elem.restore(storage/str(i))
+            for i in sorted(i)
+        ]
+    
+class ClassCache(DictCache):
+    def __init__(self, cls, **elem):
+        super().__init__(**elem)
+        self.cls = cls
+
+    def store(self, data, storage):
+        super().store(data.__dict__, storage)
+
+    def restore(self, storage):
+        return self.cls(**super().restore(storage))
+        
+# %%
 def _():    
     pass    
 
     # %%
-
     self = _playground11('20230531/0.8', 0.8)
 
     # %%
@@ -1063,6 +1115,8 @@ def _():
             self.cnv = cnv.drop('data')
             self.crispr = crispr.drop('data')
 
+            return self
+        
         @compose(property, lazy)
         def coef(self):                
             coef1 = self.proj @ self.cnv_svd1.vs
@@ -1127,13 +1181,45 @@ def _():
             crispr3['expr'] = self.coef[2] @ expr1
             crispr3['pred'] = self.crispr.scale * (crispr3.cnv + crispr3.expr) + self.crispr.center
             return crispr3
+        
+        @classmethod
+        def _from_dict(cls, **elems):
+            self = cls()
+            for k, v in elems.items():
+                setattr(self, k, v)
+            return self
+
+        def store(self, storage):
+            self.cache.store(self, storage)
+
+        @classmethod
+        def restore(cls, storage):
+            return cls.cache.restore(storage)
+        
+    Model1.cache = ClassCache(
+        Model1._from_dict,
+        cnv_svd = ClassCache(
+            namespace,
+            u = XArrayCache(),
+            vs = DictCache(XArrayCache())
+        ),
+        cnv_svd1 = XArrayCache(),
+        expr1_svd = XArrayCache(),
+        proj = XArrayCache(),
+        proj1 = XArrayCache(),
+        expr = XArrayCache(),
+        cnv = XArrayCache(),
+        crispr = XArrayCache()
+    )
 
     # %%
     train = data.sel(rows=data.train)
 
     # %%
-    self = Model1()    
-    self.fit(train)
+    self = Model1.cache.cached(
+        storage/'model1',
+        lambda: Model1().fit(train)    
+    )        
 
     # %%
     self.cnv_cor_plot(train.expr.rename(expr_cols='cols'))
