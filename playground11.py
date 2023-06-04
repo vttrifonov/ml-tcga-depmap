@@ -20,7 +20,7 @@ import dask
 from helpers import config
 from svd import SVD
 from merge import merge
-from common.caching import compose, lazy, XArrayCache
+from common.caching import compose, lazy, XArrayCache, PickleCache
 
 storage = config.cache/'playground11'
 
@@ -817,7 +817,6 @@ def _():
     _playground11.predict = predict
 _()
 
-
 # %%
 def _():
     for i in range(5):
@@ -1041,214 +1040,236 @@ class ClassCache(DictCache):
 
     def restore(self, storage):
         return self.cls(**super().restore(storage))
-        
+
+# %%
+class Model1:
+    def fit(self, train):
+        crispr, expr, cnv = [
+            _scale1(x).persist().rename('data').reset_coords(['center', 'scale'])
+            for x in [train.crispr, train.expr, train.cnv]
+        ]
+
+        cnv_svd = [
+            (a, SVD.from_mat(x.data).inv())
+            for a, x in cnv.groupby('arm')
+        ]
+        cnv_svd = {
+            a: xa.merge([x.v.rename('u'), x.us.rename('vs')]).\
+            pipe(lambda x: x.sel(pc=range(5))).\
+            persist().\
+            assign(
+                arm=lambda x: ('pc', [a]*x.sizes['pc']),
+                arm_pc=lambda x: ('pc', a+':'+x.pc.astype(str).to_series())
+            ).set_coords('arm').swap_dims(pc='arm_pc') 
+            for a, x in cnv_svd
+        }
+        cnv_svd = namespace(
+            u=xa.concat([x.u for x in cnv_svd.values()], dim='arm_pc'),
+            vs={a: x.vs for a, x in cnv_svd.items()}
+        )
+        self.cnv_svd = cnv_svd
+    
+        cnv_svd1 = SVD.from_mat(cnv_svd.u).inv()
+        cnv_svd1 = xa.merge([cnv_svd1.v.rename('u'), cnv_svd1.us.rename('vs')]).persist()
+        cnv_svd1 = cnv_svd1.assign(
+            src=lambda x: ('pc', ['cnv']*x.sizes['pc']),
+            src_pc=lambda x: ('pc', ['cnv:'+x for x in x.pc.astype(str).data]),
+        ).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
+        self.cnv_svd1 = cnv_svd1
+
+        expr1_svd = expr.data - cnv_svd1.u @ (cnv_svd1.u @ expr.data)
+        expr1_svd = SVD.from_mat(expr1_svd).inv()
+        expr1_svd = xa.merge([expr1_svd.v.rename('u'), expr1_svd.us.rename('vs')]).persist()
+        expr1_svd = expr1_svd.sel(pc=range(100))
+        expr1_svd = expr1_svd.assign(
+            src=lambda x: ('pc', ['expr']*x.sizes['pc']),
+            src_pc=lambda x: ('pc', ['expr:'+x for x in x.pc.astype(str).data]),
+        ).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
+        self.expr1_svd = expr1_svd
+
+        u = xa.concat([cnv_svd1.u, expr1_svd.u], dim='src_pc')
+
+        self.proj = (u @ crispr.data).persist()
+        self.proj1 = (cnv_svd1.u @ expr.data).persist()
+
+        self.expr = expr.drop('data')
+        self.cnv = cnv.drop('data')
+        self.crispr = crispr.drop('data')
+
+        return self
+    
+    @compose(property, lazy)
+    def coef(self):                
+        coef1 = self.proj @ self.cnv_svd1.vs
+
+        coef2 = xa.concat([
+            coef1 @ x
+            for x in self.cnv_svd.vs.values()
+        ], dim='cnv_cols')
+
+        coef3 = self.proj @ self.expr1_svd.vs
+
+        coef4 = self.proj1 @ self.cnv_svd1.vs
+
+        coef5 = xa.concat([
+            coef4 @ x
+            for x in self.cnv_svd.vs.values()
+        ], dim='cnv_cols')
+
+        return (coef1, coef2, coef3, coef4, coef5)
+
+    def cnv_cor_plot(self, x):
+        cnv_cor = self.cnv_svd.u @ _scale1(x)
+        cnv_cor['col_arm'] = self.cnv.arm.rename(cnv_cols='cols').drop('arm')
+        cnv_cor = (cnv_cor**2).compute().rename('r2')
+        cnv_cor = cnv_cor.to_dataframe().sort_values('r2')
+        cnv_cor['f'] = cnv_cor.arm==cnv_cor.col_arm
+        sns.boxplot(
+            x='f',
+            y='r2',
+            data=cnv_cor[cnv_cor.pc==0]
+        )
+
+    def cnv_cor_plot1(self, x):
+        cnv_cor = self.cnv_svd1.u @ _scale1(x)
+        cnv_cor = (cnv_cor**2).rename('r2').to_dataframe().reset_index()
+        cnv_cor = cnv_cor.groupby('cols').r2.sum()
+        print(cnv_cor.mean())
+        sns.histplot(
+            x='r2',
+            data=cnv_cor.to_frame()
+        )
+        plt.show()
+
+    def expr_cor(self, x):
+        expr_cor = self.expr1_svd.u @ _scale1(x)
+        expr_cor = (expr_cor**2).rename('r2').to_dataframe().reset_index()
+        expr_cor = expr_cor.groupby('cols').r2.sum()
+        print(expr_cor.mean())
+        sns.histplot(
+            x='r2',
+            data=expr_cor.to_frame()
+        )
+        plt.show()
+    
+    def predict(self, test):
+        cnv1 = ((test.cnv-self.cnv.center)/self.cnv.scale).persist()
+        expr1 = (test.expr-self.expr.center)/self.expr.scale
+        expr1 = (expr1 - self.coef[4] @ cnv1).persist()
+
+        crispr3 = xa.Dataset()
+        crispr3['cnv'] = self.coef[1] @ cnv1
+        crispr3['expr'] = self.coef[2] @ expr1
+        crispr3['pred'] = self.crispr.scale * (crispr3.cnv + crispr3.expr) + self.crispr.center
+        return crispr3
+    
+    @classmethod
+    def _from_dict(cls, **elems):
+        self = cls()
+        for k, v in elems.items():
+            setattr(self, k, v)
+        return self
+
+    def store(self, storage):
+        self.cache.store(self, storage)
+
+    @classmethod
+    def restore(cls, storage):
+        return cls.cache.restore(storage)
+    
+Model1.cache = ClassCache(
+    Model1._from_dict,
+    cnv_svd = ClassCache(
+        namespace,
+        u = XArrayCache(),
+        vs = DictCache(XArrayCache())
+    ),
+    cnv_svd1 = XArrayCache(),
+    expr1_svd = XArrayCache(),
+    proj = XArrayCache(),
+    proj1 = XArrayCache(),
+    expr = XArrayCache(),
+    cnv = XArrayCache(),
+    crispr = XArrayCache()
+)
+
 # %%
 def _():    
     pass    
 
     # %%
-    self = _playground11('20230531/0.8', 0.8)
+    class _analysis2:
+        @compose(property, lazy)
+        def storage(self):
+            return config.cache / 'playground11' / self.name
 
-    # %%
-    data = xa.merge([
-        merge.dm_expr.rename(data='expr', cols='expr_cols'),
-        merge.dm_cnv.rename(data='cnv', cols='cnv_cols'),
-        merge.crispr.rename(data='crispr', cols='crispr_cols')
-    ], join='inner', compat='override')
-    data = data.set_coords('arm')
-    for x in ['expr', 'cnv', 'crispr']:
-        data[x] = data[x].astype(np.float32)
-    data['train'] = self.train_split.train
+        def __init__(self, name, train_split_ratio):
+            self._train_split_ratio = train_split_ratio
+            self.name = name
 
-    # %%
-    class Model1:
-        def fit(self, train):
-            crispr, expr, cnv = [
-                _scale1(x).persist().rename('data').reset_coords(['center', 'scale'])
-                for x in [train.crispr, train.expr, train.cnv]
-            ]
+        @compose(property, lazy, PickleCache(compressor=None))
+        def train_split_ratio(self):
+            return self._train_split_ratio        
 
-            cnv_svd = [
-                (a, SVD.from_mat(x.data).inv())
-                for a, x in cnv.groupby('arm')
-            ]
-            cnv_svd = {
-                a: xa.merge([x.v.rename('u'), x.us.rename('vs')]).\
-                pipe(lambda x: x.sel(pc=range(5))).\
-                persist().\
-                assign(
-                    arm=lambda x: ('pc', [a]*x.sizes['pc']),
-                    arm_pc=lambda x: ('pc', a+':'+x.pc.astype(str).to_series())
-                ).set_coords('arm').swap_dims(pc='arm_pc') 
-                for a, x in cnv_svd
-            }
-            cnv_svd = namespace(
-                u=xa.concat([x.u for x in cnv_svd.values()], dim='arm_pc'),
-                vs={a: x.vs for a, x in cnv_svd.items()}
-            )
-            self.cnv_svd = cnv_svd
-        
-            cnv_svd1 = SVD.from_mat(cnv_svd.u).inv()
-            cnv_svd1 = xa.merge([cnv_svd1.v.rename('u'), cnv_svd1.us.rename('vs')]).persist()
-            cnv_svd1 = cnv_svd1.assign(
-                src=lambda x: ('pc', ['cnv']*x.sizes['pc']),
-                src_pc=lambda x: ('pc', ['cnv:'+x for x in x.pc.astype(str).data]),
-            ).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
-            self.cnv_svd1 = cnv_svd1
-
-            expr1_svd = expr.data - cnv_svd1.u @ (cnv_svd1.u @ expr.data)
-            expr1_svd = SVD.from_mat(expr1_svd).inv()
-            expr1_svd = xa.merge([expr1_svd.v.rename('u'), expr1_svd.us.rename('vs')]).persist()
-            expr1_svd = expr1_svd.sel(pc=range(100))
-            expr1_svd = expr1_svd.assign(
-                src=lambda x: ('pc', ['expr']*x.sizes['pc']),
-                src_pc=lambda x: ('pc', ['expr:'+x for x in x.pc.astype(str).data]),
-            ).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
-            self.expr1_svd = expr1_svd
-
-            u = xa.concat([cnv_svd1.u, expr1_svd.u], dim='src_pc')
-
-            self.proj = (u @ crispr.data).persist()
-            self.proj1 = (cnv_svd1.u @ expr.data).persist()
-
-            self.expr = expr.drop('data')
-            self.cnv = cnv.drop('data')
-            self.crispr = crispr.drop('data')
-
-            return self
+        @compose(property, lazy, PickleCache(compressor=None))
+        def train_split(self):
+            rows = merge.crispr.rows
+            rows['train'] = ('rows', np.random.random(rows.shape[0])<=self.train_split_ratio)
+            return rows
         
         @compose(property, lazy)
-        def coef(self):                
-            coef1 = self.proj @ self.cnv_svd1.vs
+        def data(self):
+            data = xa.merge([
+                merge.dm_expr.rename(data='expr', cols='expr_cols'),
+                merge.dm_cnv.rename(data='cnv', cols='cnv_cols'),
+                merge.crispr.rename(data='crispr', cols='crispr_cols')
+            ], join='inner', compat='override')
+            data = data.set_coords('arm')
+            for x in ['expr', 'cnv', 'crispr']:
+                data[x] = data[x].astype(np.float32)
+            data['train'] = self.train_split.train
+            return data
 
-            coef2 = xa.concat([
-                coef1 @ x
-                for x in self.cnv_svd.vs.values()
-            ], dim='cnv_cols')
-
-            coef3 = self.proj @ self.expr1_svd.vs
-
-            coef4 = self.proj1 @ self.cnv_svd1.vs
-
-            coef5 = xa.concat([
-                coef4 @ x
-                for x in self.cnv_svd.vs.values()
-            ], dim='cnv_cols')
-
-            return (coef1, coef2, coef3, coef4, coef5)
-
-        def cnv_cor_plot(self, x):
-            cnv_cor = self.cnv_svd.u @ _scale1(x)
-            cnv_cor['col_arm'] = self.cnv.arm.rename(cnv_cols='cols').drop('arm')
-            cnv_cor = (cnv_cor**2).compute().rename('r2')
-            cnv_cor = cnv_cor.to_dataframe().sort_values('r2')
-            cnv_cor['f'] = cnv_cor.arm==cnv_cor.col_arm
-            sns.boxplot(
-                x='f',
-                y='r2',
-                data=cnv_cor[cnv_cor.pc==0]
-            )
-
-        def cnv_cor_plot1(self, x):
-            cnv_cor = self.cnv_svd1.u @ _scale1(x)
-            cnv_cor = (cnv_cor**2).rename('r2').to_dataframe().reset_index()
-            cnv_cor = cnv_cor.groupby('cols').r2.sum()
-            print(cnv_cor.mean())
-            sns.histplot(
-                x='r2',
-                data=cnv_cor.to_frame()
-            )
-            plt.show()
-
-        def expr_cor(self, x):
-            expr_cor = self.expr1_svd.u @ _scale1(x)
-            expr_cor = (expr_cor**2).rename('r2').to_dataframe().reset_index()
-            expr_cor = expr_cor.groupby('cols').r2.sum()
-            print(expr_cor.mean())
-            sns.histplot(
-                x='r2',
-                data=expr_cor.to_frame()
-            )
-            plt.show()
+        @compose(property, lazy, Model1.cache)
+        def model1(self):
+            train = self.data.sel(rows=self.data.train)
+            return Model1().fit(train)
         
-        def predict(self, test):
-            cnv1 = ((test.cnv-self.cnv.center)/self.cnv.scale).persist()
-            expr1 = (test.expr-self.expr.center)/self.expr.scale
-            expr1 = (expr1 - self.coef[4] @ cnv1).persist()
-
-            crispr3 = xa.Dataset()
-            crispr3['cnv'] = self.coef[1] @ cnv1
-            crispr3['expr'] = self.coef[2] @ expr1
-            crispr3['pred'] = self.crispr.scale * (crispr3.cnv + crispr3.expr) + self.crispr.center
-            return crispr3
-        
-        @classmethod
-        def _from_dict(cls, **elems):
-            self = cls()
-            for k, v in elems.items():
-                setattr(self, k, v)
-            return self
-
-        def store(self, storage):
-            self.cache.store(self, storage)
-
-        @classmethod
-        def restore(cls, storage):
-            return cls.cache.restore(storage)
-        
-    Model1.cache = ClassCache(
-        Model1._from_dict,
-        cnv_svd = ClassCache(
-            namespace,
-            u = XArrayCache(),
-            vs = DictCache(XArrayCache())
-        ),
-        cnv_svd1 = XArrayCache(),
-        expr1_svd = XArrayCache(),
-        proj = XArrayCache(),
-        proj1 = XArrayCache(),
-        expr = XArrayCache(),
-        cnv = XArrayCache(),
-        crispr = XArrayCache()
-    )
+    # %%
+    self = _analysis2('20230531/0.8', 0.8)
 
     # %%
+    data = self.data
     train = data.sel(rows=data.train)
 
     # %%
-    self = Model1.cache.cached(
-        storage/'model1',
-        lambda: Model1().fit(train)    
-    )        
+    self.model1.cnv_cor_plot(train.expr.rename(expr_cols='cols'))
 
     # %%
-    self.cnv_cor_plot(train.expr.rename(expr_cols='cols'))
-
-    # %%
-    self.cnv_cor_plot(train.crispr.rename(crispr_cols='cols'))
+    self.model1.cnv_cor_plot(train.crispr.rename(crispr_cols='cols'))
 
     # %%    
-    self.cnv_cor_plot1(train.expr.rename(expr_cols='cols'))
+    self.model1.cnv_cor_plot1(train.expr.rename(expr_cols='cols'))
 
     # %%
-    self.cnv_cor_plot1(train.crispr.rename(crispr_cols='cols'))
+    self.model1.cnv_cor_plot1(train.crispr.rename(crispr_cols='cols'))
 
     # %%
-    self.expr_cor(train.crispr.rename(crispr_cols='cols'))
+    self.model1.expr_cor(train.crispr.rename(crispr_cols='cols'))
 
     # %%
     crispr1 = xa.merge([
-        self.proj.rename('proj'),
-        self.proj1.rename('proj1'),
-        self.coef[0].rename('coef1'),
-        self.coef[1].rename('coef2'),
-        self.coef[2].rename('coef3'),
-        self.coef[3].rename('coef4'),
-        self.coef[4].rename('coef5')
+        self.model1.proj.rename('proj'),
+        self.model1.proj1.rename('proj1'),
+        self.model1.coef[0].rename('coef1'),
+        self.model1.coef[1].rename('coef2'),
+        self.model1.coef[2].rename('coef3'),
+        self.model1.coef[3].rename('coef4'),
+        self.model1.coef[4].rename('coef5')
     ], join='inner')
 
     # %%
-    crispr3 = self.predict(data)
+    crispr3 = self.model1.predict(data)
     crispr3['data'] = data.crispr
     crispr3['train'] = data.train
     crispr3 = crispr3.persist()
