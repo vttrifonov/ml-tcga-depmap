@@ -22,7 +22,55 @@ from svd import SVD
 from merge import merge
 from common.caching import compose, lazy, XArrayCache, PickleCache
 
-storage = config.cache/'playground11'
+from common.caching import FileCache
+
+class DictCache(FileCache):
+    def __init__(self, *default, **elem):
+        super().__init__(True, '')
+        self.default = default[0] if len(default)>0 else None
+        self.elem = elem
+
+    def store(self, data, storage):
+        for k, v in data.items():
+            s = self.elem.get(k, self.default)
+            if s is not None:
+                s.store(v, storage/str(k))
+
+    def restore(self, storage):
+        data = {}
+        for k in storage.glob('*'):
+            k = k.name
+            s = self.elem.get(k, self.default)
+            if s is not None:
+                data[k] = s.restore(storage/k)
+        return data
+
+class ArrayCache(FileCache):
+    def __init__(self, elem):
+        super().__init__(True, ext='')
+        self.elem = elem
+
+    def store(self, data, storage):
+        for i, v in enumerate(data):
+            self.elem.store(v, storage/str(i))
+
+    def restore(self, storage):
+        i = [int(x.name) for x in storage.glob('*')]
+        return [
+            self.elem.restore(storage/str(i))
+            for i in sorted(i)
+        ]
+    
+class ClassCache(DictCache):
+    def __init__(self, cls, **elem):
+        super().__init__(**elem)
+        self.cls = cls
+
+    def store(self, data, storage):
+        super().store(data.__dict__, storage)
+
+    def restore(self, storage):
+        return self.cls(**super().restore(storage))
 
 # %%
 
@@ -31,6 +79,8 @@ pd.set_option('display.max_columns', 500)
 pd.set_option('display.width', 1000)
 
 config.exec()
+
+storage = config.cache/'playground11'
 
 # %%
 
@@ -174,6 +224,14 @@ def _scale(d):
     d['mean'] = (d.dims[1], fit.mean_)
     d['var'] = (d.dims[1], fit.var_)
     d = fit.transform(d)
+    return d
+
+def _scale1(d, rows=['rows']):
+    cols = list(set(d.dims)-set(rows))
+    d['center'] = (cols, d.mean(dim=rows))
+    d = d - d.center
+    d['scale'] = (cols, np.sqrt((d**2).sum(dim=rows)))
+    d = d/d.scale
     return d
 
 def plot_fft_resid(x1):
@@ -972,74 +1030,6 @@ def _():
         cnv_glob = (m.crispr_cnv_fit.r2[0,:]>2).values,
         cnv_loc = ((m.crispr_cnv_fit.r2[1:,:]>2).sum(axis=0)>2).values
     )).value_counts().sort_index()#.reset_index().pivot(index='loc', columns='glob')
-
-
-# %%
-def _normalize(x):
-    return x/np.sqrt((x**2).sum(dim='rows'))
-
-def _permute(x):
-    return x.rename('x').to_dataset().\
-        assign(rows=lambda x: ('rows', np.random.permutation(x.rows.data))).x
-
-def _scale1(d, rows=['rows']):
-    cols = list(set(d.dims)-set(rows))
-    d['center'] = (cols, d.mean(dim=rows))
-    d = d - d.center
-    d['scale'] = (cols, np.sqrt((d**2).sum(dim=rows)))
-    d = d/d.scale
-    return d
-
-# %%
-from common.caching import FileCache
-
-class DictCache(FileCache):
-    def __init__(self, *default, **elem):
-        super().__init__(True, '')
-        self.default = default[0] if len(default)>0 else None
-        self.elem = elem
-
-    def store(self, data, storage):
-        for k, v in data.items():
-            s = self.elem.get(k, self.default)
-            if s is not None:
-                s.store(v, storage/str(k))
-
-    def restore(self, storage):
-        data = {}
-        for k in storage.glob('*'):
-            k = k.name
-            s = self.elem.get(k, self.default)
-            if s is not None:
-                data[k] = s.restore(storage/k)
-        return data
-
-class ArrayCache(FileCache):
-    def __init__(self, elem):
-        super().__init__(True, ext='')
-        self.elem = elem
-
-    def store(self, data, storage):
-        for i, v in enumerate(data):
-            self.elem.store(v, storage/str(i))
-
-    def restore(self, storage):
-        i = [int(x.name) for x in storage.glob('*')]
-        return [
-            self.elem.restore(storage/str(i))
-            for i in sorted(i)
-        ]
-    
-class ClassCache(DictCache):
-    def __init__(self, cls, **elem):
-        super().__init__(**elem)
-        self.cls = cls
-
-    def store(self, data, storage):
-        super().store(data.__dict__, storage)
-
-    def restore(self, storage):
-        return self.cls(**super().restore(storage))
 
 # %%
 class Model1:
