@@ -1322,7 +1322,6 @@ def _():
         x3.groupby('train').aggregate(lambda x: x.loc[:, ['data', 'pred']].corr().iloc[0,1])
     )
 
-
     # %%
     from scipy.stats import entropy
     x2['coef1'].rename('r').to_dataframe().assign(
