@@ -1338,7 +1338,6 @@ def log_proba(x, vs, cols, pcs):
 # %%
 class Model3:
     def fit(self, train):
-        # %%
         crispr, expr, cnv = [
             _scale1(x).rename('data').reset_coords(['center', 'scale'])
             for x in [train.crispr, train.expr, train.cnv]
@@ -1361,7 +1360,6 @@ class Model3:
             src_pc=lambda x: ('pc', ['expr:'+x for x in x.pc.astype(str).data]),
         ).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
 
-        # %%
         g = xa.concat([cnv_svd.u, expr_svd.u], dim='src_pc')
         g = gmm(g.transpose('rows', 'src_pc'), 2)
         g['s'] = 1/(g.s+1e-3)
@@ -1380,21 +1378,15 @@ class Model3:
         self.cnv = cnv.drop('data')
         self.crispr = crispr.drop('data')
 
-        # %%
-
-        # %%
-
         return self
     
     @compose(property, lazy)
     def coef(self):
-        # %%
         coef1 = xa.dot(self.proj, self.gmm.vs, dims='pc') @ self.cnv_svd.vs
         coef3 = xa.dot(self.proj, self.gmm.vs, dims='pc') @ self.expr_svd.vs
         coef4 = self.proj1 @ self.cnv_svd.vs
         self.coef = (coef1, coef3, coef4)
 
-        # %%
         return (coef1, coef3, coef4)
 
     def cnv_cor_plot1(self, x):
@@ -1420,7 +1412,6 @@ class Model3:
         plt.show()
     
     def predict(self, test):
-        # %%
         cnv1 = (test.cnv-self.cnv.center)/self.cnv.scale
         cnv1 @= self.cnv_svd.vs
 
@@ -1445,14 +1436,6 @@ class Model3:
         crispr3 = xa.Dataset()
         crispr3['pred'] = pred
         crispr3['score'] = score
-
-        # %%
-        x = xa.merge([crispr3.score, data.train]).to_dataframe()
-        (
-            p9.ggplot(x)+p9.aes('train', 'score')+p9.geom_boxplot()
-        )
-
-        # %%
 
         return crispr3
     
