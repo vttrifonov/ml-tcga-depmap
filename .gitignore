@@ -16,3 +16,4 @@ renv
 *.Rproj
 .Rhistory
 dask-worker-space
+*.ipynb
