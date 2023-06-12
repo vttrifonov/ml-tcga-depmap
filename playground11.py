@@ -1360,8 +1360,14 @@ class Model3:
             src_pc=lambda x: ('pc', ['expr:'+x for x in x.pc.astype(str).data]),
         ).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
 
-        g = xa.concat([cnv_svd.u, expr_svd.u], dim='src_pc')
-        g = gmm(g.transpose('rows', 'src_pc'), 2)
+        while True:
+            g = xa.concat([cnv_svd.u, expr_svd.u], dim='src_pc')
+            g = gmm(g.transpose('rows', 'src_pc'), 2)
+            s = g.p.sum(dim='rows')
+            print(s.data)
+            if np.all(s>100):
+                break
+        
         g['s'] = 1/(g.s+1e-3)
         g['vs'] = g.v*g.s
         k = g.sizes['src_pc']     
@@ -1455,10 +1461,11 @@ class Model3:
     
 Model3.cache = ClassCache(
     Model3._from_dict,
-    cnv_svd1 = XArrayCache(),
-    expr1_svd = XArrayCache(),
+    cnv_svd = XArrayCache(),
+    expr_svd = XArrayCache(),
     proj = XArrayCache(),
     proj1 = XArrayCache(),
+    gmm = XArrayCache(),
     expr = XArrayCache(),
     cnv = XArrayCache(),
     crispr = XArrayCache()
@@ -1500,6 +1507,28 @@ def _():
                 data[x] = data[x].astype(np.float32)
             data['train'] = self.train_split.train
             return data
+        
+        @compose(property, lazy)
+        def data1(self):
+            data = xa.merge([
+                xa.concat([
+                    getattr(merge, e)[['data']].\
+                        assign(src=lambda x: ('rows', [e]*x.sizes['rows']))
+                    for e in ['dm_expr', 'gdc_expr']
+                ], dim='rows').rename(data='expr', cols='expr_cols'),
+                xa.concat([
+                    getattr(merge, e)[['data', 'arm']].\
+                        assign(src=lambda x: ('rows', [e]*x.sizes['rows']))
+                    for e in ['dm_cnv', 'gdc_cnv']
+                ], dim='rows').rename(data='cnv', cols='cnv_cols')
+            ], join='inner', compat='override')
+            data = data.set_coords('arm')
+            for x in ['expr', 'cnv']:
+                data[x] = data[x].astype(np.float32)
+            data['train'] = self.train_split.train
+            data['train'] = data.train.fillna(2).astype(str)
+            return data
+
 
         @compose(property, lazy, Model1.cache)
         def model1(self):
@@ -1511,6 +1540,11 @@ def _():
             train = self.data.sel(rows=self.data.train)
             return Model2().fit(train)
         
+        @compose(property, lazy)
+        def model3(self):
+            train = self.data.sel(rows=self.data.train)
+            return Model3().fit(train)
+        
     # %%
     self = _analysis2('20230531/0.8', 0.8)
 
@@ -1519,7 +1553,7 @@ def _():
     train = data.sel(rows=data.train)
 
     # %%
-    model = self.model2
+    model = self.model3
 
     # %%
     model.cnv_cor_plot(train.expr.rename(expr_cols='cols'))
@@ -1606,6 +1640,20 @@ def _():
 
     # %%
     x1.sort_values('False')
+
+    # %%
+    data1 = self.data1
+    crispr3 = model.predict(data1)
+    crispr3['train'] = data1.train
+    crispr3 = crispr3.persist()
+
+    # %%
+    x1 = crispr3[['score', 'train']]
+    x1 = x1.to_dataframe()
+    (
+        p9.ggplot(x1[x1.train=='2.0'])+p9.aes('train', 'np.clip(score, -20000, 0)')+
+            p9.geom_violin()
+    )
 
     # %%    
     x2 = crispr1.sel(crispr_cols=['ZFYVE16 (9765)']).persist()
