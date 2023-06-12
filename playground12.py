@@ -707,7 +707,7 @@ def _():
     x1 = crispr3[['score', 'train']]
     x1 = x1.to_dataframe()
     (
-        p9.ggplot(x1[x1.train=='2.0'])+p9.aes('train', 'np.clip(score, -20000, 0)')+
+        p9.ggplot(x1)+p9.aes('train', 'np.clip(score, -20000, 1000)')+
             p9.geom_violin()
     )
 
