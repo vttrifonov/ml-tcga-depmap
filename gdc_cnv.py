@@ -1,8 +1,8 @@
 import pandas as pd
-from common.defs import lazy_property
-from common.dir import Dir, cached_property
-from gdc.cnv import cnv as _cnv
-from helpers import slice_iter, config
+from .common.defs import lazy_property
+from .common.dir import Dir, cached_property
+from .gdc.cnv import cnv as _cnv
+from .helpers import slice_iter, config
 import numpy as np
 import zarr
 from joblib import Parallel, delayed
@@ -10,11 +10,11 @@ import numcodecs as nc
 from pathlib import Path
 import dask.array as daa
 import xarray as xa
-import ensembl.sql.ensembl as ensembl
+from .ensembl.sql import ensembl
 import json
 import sparse
-import ncbi.sql.ncbi as ncbi
-import ucsc_gb.sql as ucsc
+from .ncbi.sql import ncbi
+from .ucsc_gb import sql as ucsc
 
 config.exec()
 

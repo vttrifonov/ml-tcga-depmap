@@ -1,10 +1,10 @@
 import pandas as pd
-from depmap_crispr import crispr as depmap_crispr
-from depmap_expr import expr as depmap_expr
-from depmap_cnv import cnv as depmap_cnv
-from gdc_expr import expr as gdc_expr
-from gdc_cnv import cnv as gdc_cnv
-from common.defs import lazy_property
+from .depmap_crispr import crispr as depmap_crispr
+from .depmap_expr import expr as depmap_expr
+from .depmap_cnv import cnv as depmap_cnv
+from .gdc_expr import expr as gdc_expr
+from .gdc_cnv import cnv as gdc_cnv
+from .common.defs import lazy_property
 
 def order_set(s, x):
     s = list(s)

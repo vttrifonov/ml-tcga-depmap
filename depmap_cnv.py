@@ -1,16 +1,16 @@
 import pandas as pd
 import xarray as xa
 import numpy as np
-from common.defs import lazy_property
-from depmap.depmap import public_21q1 as release
-from common.dir import cached_property, Dir
-from helpers import config
+from .common.defs import lazy_property
+from .depmap.depmap import public_21q1 as release
+from .common.dir import cached_property, Dir
+from .helpers import config
 from pathlib import Path
 import zarr
 import numcodecs as nc
 import dask.array as daa
-import ncbi.sql.ncbi as ncbi
-import ucsc_gb.sql as ucsc
+from .ncbi.sql import ncbi
+from .ucsc_gb import sql as ucsc
 
 config.exec()
 

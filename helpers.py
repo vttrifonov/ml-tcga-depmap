@@ -1,16 +1,18 @@
 import pandas as pd
-from common.defs import lazy_property, pipe, lapply
-from common.dir import Dir
+from .common.defs import lazy_property, pipe, lapply
+from .common.dir import Dir
 import numpy as np
 from pathlib import Path
 import more_itertools as mit
 import matplotlib.pyplot as plt
 import os
 import yaml
+from pathlib import Path
 
 class Config:
     def exec(self):
-        with open("config.yml", "r") as config:
+        config_file = Path(__file__).parent/'config.yml'
+        with open(config_file, "r") as config:
             cfg = yaml.load(config, Loader=yaml.FullLoader)
         for key, value in cfg.items():
             os.environ[key] = value

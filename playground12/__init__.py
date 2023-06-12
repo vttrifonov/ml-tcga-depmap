@@ -15,12 +15,12 @@ import importlib
 import dask_ml.preprocessing as dmlp
 import plotly.express as px
 import dask
-from helpers import config
-from svd import SVD
-from merge import merge
-from common.caching import compose, lazy, XArrayCache, PickleCache
 
-from common.caching import FileCache
+from ..svd import SVD
+from ..merge import merge
+from ..helpers import config
+from ..common.caching import compose, lazy, XArrayCache, PickleCache
+from ..common.caching import FileCache
 
 class DictCache(FileCache):
     def __init__(self, *default, **elem):
@@ -529,220 +529,72 @@ Model3.cache = ClassCache(
 )
 
 # %%
-def _():    
-    pass    
+class _analysis:
+    @compose(property, lazy)
+    def storage(self):
+        return config.cache / 'playground12' / self.name
 
-    # %%
-    class _analysis2:
-        @compose(property, lazy)
-        def storage(self):
-            return config.cache / 'playground11' / self.name
+    def __init__(self, name, train_split_ratio):
+        self._train_split_ratio = train_split_ratio
+        self.name = name
 
-        def __init__(self, name, train_split_ratio):
-            self._train_split_ratio = train_split_ratio
-            self.name = name
+    @compose(property, lazy, PickleCache(compressor=None))
+    def train_split_ratio(self):
+        return self._train_split_ratio        
 
-        @compose(property, lazy, PickleCache(compressor=None))
-        def train_split_ratio(self):
-            return self._train_split_ratio        
-
-        @compose(property, lazy, PickleCache(compressor=None))
-        def train_split(self):
-            rows = merge.crispr.rows
-            rows['train'] = ('rows', np.random.random(rows.shape[0])<=self.train_split_ratio)
-            return rows
-        
-        @compose(property, lazy)
-        def data(self):
-            data = xa.merge([
-                merge.dm_expr.rename(data='expr', cols='expr_cols'),
-                merge.dm_cnv.rename(data='cnv', cols='cnv_cols'),
-                merge.crispr.rename(data='crispr', cols='crispr_cols')
-            ], join='inner', compat='override')
-            data = data.set_coords('arm')
-            for x in ['expr', 'cnv', 'crispr']:
-                data[x] = data[x].astype(np.float32)
-            data['train'] = self.train_split.train
-            return data
-        
-        @compose(property, lazy)
-        def data1(self):
-            data = xa.merge([
-                xa.concat([
-                    getattr(merge, e)[['data']].\
-                        assign(src=lambda x: ('rows', [e]*x.sizes['rows']))
-                    for e in ['dm_expr', 'gdc_expr']
-                ], dim='rows').rename(data='expr', cols='expr_cols'),
-                xa.concat([
-                    getattr(merge, e)[['data', 'arm']].\
-                        assign(src=lambda x: ('rows', [e]*x.sizes['rows']))
-                    for e in ['dm_cnv', 'gdc_cnv']
-                ], dim='rows').rename(data='cnv', cols='cnv_cols')
-            ], join='inner', compat='override')
-            data = data.set_coords('arm')
-            for x in ['expr', 'cnv']:
-                data[x] = data[x].astype(np.float32)
-            data['train'] = self.train_split.train
-            data['train'] = data.train.fillna(2).astype(str)
-            return data
-
-
-        @compose(property, lazy, Model1.cache)
-        def model1(self):
-            train = self.data.sel(rows=self.data.train)
-            return Model1().fit(train)
-        
-        @compose(property, lazy, Model2.cache)
-        def model2(self):
-            train = self.data.sel(rows=self.data.train)
-            return Model2().fit(train)
-        
-        @compose(property, lazy)
-        def model3(self):
-            train = self.data.sel(rows=self.data.train)
-            return Model3().fit(train)
-        
-    # %%
-    self = _analysis2('20230531/0.8', 0.8)
-
-    # %%
-    data = self.data
-    train = data.sel(rows=data.train)
-
-    # %%
-    model = self.model3
-
-    # %%
-    model.cnv_cor_plot(train.expr.rename(expr_cols='cols'))
-
-    # %%
-    model.cnv_cor_plot(train.crispr.rename(crispr_cols='cols'))
-
-    # %%    
-    model.cnv_cor_plot1(train.expr.rename(expr_cols='cols'))
-
-    # %%
-    model.cnv_cor_plot1(train.crispr.rename(crispr_cols='cols'))
-
-    # %%
-    model.expr_cor(train.crispr.rename(crispr_cols='cols'))
-
-    # %%
-    #model1
-    crispr1 = xa.merge([
-        model.proj.rename('proj'),
-        model.proj1.rename('proj1'),
-        model.coef[0].rename('coef1'),
-        model.coef[1].rename('coef2'),
-        model.coef[2].rename('coef3'),
-        model.coef[3].rename('coef4'),
-        model.coef[4].rename('coef5')
-    ], join='inner')
-
-    # %%
-    #model2
-    crispr1 = xa.merge([
-        model.proj.rename('proj'),
-        model.proj1.rename('proj1'),
-        model.coef[0].rename('coef1'),
-        model.coef[1].rename('coef3'),
-        model.coef[2].rename('coef4'),
-    ], join='inner')
-
-    # %%
-    crispr3 = model.predict(data)
-    crispr3['data'] = data.crispr
-    crispr3['train'] = data.train
-    crispr3 = crispr3.persist()
+    @compose(property, lazy, PickleCache(compressor=None))
+    def train_split(self):
+        rows = merge.crispr.rows
+        rows['train'] = ('rows', np.random.random(rows.shape[0])<=self.train_split_ratio)
+        return rows
     
-    # %%
-    x1 = crispr3.sel(rows=crispr3.train)[['cnv', 'expr']]
-    x1 = (x1**2).sum(dim='rows')
-    x1 = x1.to_dataframe()
-    print(x1.mean())
-    print(
-        p9.ggplot(x1)+
-            p9.aes('cnv', 'expr')+
-            p9.geom_point(alpha=0.1, size=2)+
-            p9.geom_hline(yintercept=0.23)+
-            p9.geom_vline(xintercept=0.40)
-    )
-    import sklearn.metrics as sklm
-    print(
-        sklm.confusion_matrix(x1.cnv>0.40, x1.expr>0.23)
-    )
+    @compose(property, lazy)
+    def data(self):
+        data = xa.merge([
+            merge.dm_expr.rename(data='expr', cols='expr_cols'),
+            merge.dm_cnv.rename(data='cnv', cols='cnv_cols'),
+            merge.crispr.rename(data='crispr', cols='crispr_cols')
+        ], join='inner', compat='override')
+        data = data.set_coords('arm')
+        for x in ['expr', 'cnv', 'crispr']:
+            data[x] = data[x].astype(np.float32)
+        data['train'] = self.train_split.train
+        return data
+    
+    @compose(property, lazy)
+    def data1(self):
+        data = xa.merge([
+            xa.concat([
+                getattr(merge, e)[['data']].\
+                    assign(src=lambda x: ('rows', [e]*x.sizes['rows']))
+                for e in ['dm_expr', 'gdc_expr']
+            ], dim='rows').rename(data='expr', cols='expr_cols'),
+            xa.concat([
+                getattr(merge, e)[['data', 'arm']].\
+                    assign(src=lambda x: ('rows', [e]*x.sizes['rows']))
+                for e in ['dm_cnv', 'gdc_cnv']
+            ], dim='rows').rename(data='cnv', cols='cnv_cols')
+        ], join='inner', compat='override')
+        data = data.set_coords('arm')
+        for x in ['expr', 'cnv']:
+            data[x] = data[x].astype(np.float32)
+        data['train'] = self.train_split.train
+        data['train'] = data.train.fillna(2).astype(str)
+        return data
 
-    # %%
-    x1.query('expr>0.3 & cnv>0.4')
 
-    # %%
-    x1 = crispr3[['pred', 'data', 'train']]
-    x1 = x1.groupby('train').apply(
-        lambda x: x[['pred', 'data']].\
-            pipe(lambda x: x-x.mean(dim='rows')).\
-            pipe(lambda x: x/np.sqrt((x**2).sum(dim='rows'))).\
-            pipe(lambda x: (x.pred * x.data).sum(dim='rows'))
-    ).rename('cor')
-    x1 = x1.to_dataframe()
-    x1 = x1.reset_index().pivot_table(
-        index='crispr_cols', columns='train', values='cor'
-    )
-    x1.columns = x1.columns.astype(str)
-    print(
-        p9.ggplot(x1)+
-            p9.aes('False', 'True')+
-            p9.geom_point(alpha=0.1, size=2)
-    )
-
-    # %%
-    x1.sort_values('False')
-
-    # %%
-    data1 = self.data1
-    crispr3 = model.predict(data1)
-    crispr3['train'] = data1.train
-    crispr3 = crispr3.persist()
-
-    # %%
-    x1 = crispr3[['score', 'train']]
-    x1 = x1.to_dataframe()
-    (
-        p9.ggplot(x1)+p9.aes('train', 'np.clip(score, -20000, 1000)')+
-            p9.geom_violin()
-    )
-
-    # %%    
-    x2 = crispr1.sel(crispr_cols=['ZFYVE16 (9765)']).persist()
-    x2 = xa.merge([x2, crispr3], join='inner')
-
-    # %%
-    x3 = x2[['data', 'pred', 'train']].to_dataframe()
-    print(
-        p9.ggplot(x3)+            
-            p9.aes('data', 'pred', color='train')+
-            p9.geom_point()+
-            p9.geom_smooth(method='lm')
-    )
-    print(
-        x3.groupby('train').aggregate(lambda x: x.loc[:, ['data', 'pred']].corr().iloc[0,1])
-    )
-
-    # %%
-    from scipy.stats import entropy
-    x2['coef1'].rename('r').to_dataframe().assign(
-        r2=lambda x: x.r**2/(x.r**2).sum()
-    ).r2.sort_values().\
-        pipe(lambda x: np.exp(entropy(x)))
-        #plot(kind='bar')
-        #tail(10)    
-
-    # %%
-    x2['coef2'].rename('r').to_dataframe().assign(
-        r2=lambda x: x.r**2
-    ).sort_values('r2').tail(10)
-
-    # %%
-    x2['coef3'].rename('r').to_dataframe().assign(
-        r2=lambda x: x.r**2
-    ).sort_values('r2').tail(10)
-
+    @compose(property, lazy)
+    def model1(self):
+        train = self.data.sel(rows=self.data.train)
+        return Model1().fit(train)
+    
+    @compose(property, lazy)
+    def model2(self):
+        train = self.data.sel(rows=self.data.train)
+        return Model2().fit(train)
+    
+    @compose(property, lazy)
+    def model3(self):
+        train = self.data.sel(rows=self.data.train)
+        return Model3().fit(train)
+        

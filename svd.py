@@ -1,7 +1,7 @@
 import xarray as xa
 import dask.array as daa
 import numpy as np
-from common.defs import lazy_property
+from .common.defs import lazy_property
 
 def _perm(x):
     return x[np.random.permutation(x.shape[0]), :]
