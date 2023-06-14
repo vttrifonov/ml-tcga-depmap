@@ -544,7 +544,10 @@ class _analysis:
 
     @compose(property, lazy, PickleCache(compressor=None))
     def train_split(self):
-        rows = merge.crispr.rows
+        rows = xa.concat([
+            merge.dm_expr.rows, 
+            merge.gdc_expr.rows
+        ], dim='rows')
         rows['train'] = ('rows', np.random.random(rows.shape[0])<=self.train_split_ratio)
         return rows
     
@@ -565,13 +568,11 @@ class _analysis:
     def data1(self):
         data = xa.merge([
             xa.concat([
-                getattr(merge, e)[['data']].\
-                    assign(src=lambda x: ('rows', [e]*x.sizes['rows']))
+                getattr(merge, e)[['data']]
                 for e in ['dm_expr', 'gdc_expr']
             ], dim='rows').rename(data='expr', cols='expr_cols'),
             xa.concat([
-                getattr(merge, e)[['data', 'arm']].\
-                    assign(src=lambda x: ('rows', [e]*x.sizes['rows']))
+                getattr(merge, e)[['data', 'arm']]
                 for e in ['dm_cnv', 'gdc_cnv']
             ], dim='rows').rename(data='cnv', cols='cnv_cols')
         ], join='inner', compat='override')
@@ -579,9 +580,16 @@ class _analysis:
         for x in ['expr', 'cnv']:
             data[x] = data[x].astype(np.float32)
         data['train'] = self.train_split.train
-        data['train'] = data.train.fillna(2).astype(str)
+        data['train'] = data.train.where(data.rows.isin(merge.crispr.rows), 2).astype(str)
         return data
-
+    
+    @property
+    def data2(self):
+        data = self.data1.copy()
+        data['crispr'] = merge.crispr.data.rename(rows='crispr_rows', cols='crispr_cols')
+        data['src'] = xa.where(data.rows.isin(data.crispr_rows), 'dm', 'gdc')
+        data['train'] = self.train_split.train        
+        return data
 
     @compose(property, lazy)
     def model1(self):
@@ -598,3 +606,5 @@ class _analysis:
         train = self.data.sel(rows=self.data.train)
         return Model3().fit(train)
         
+
+# %%
