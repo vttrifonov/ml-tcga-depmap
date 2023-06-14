@@ -69,83 +69,143 @@ class GMM:
         return log_score, log_proba
 
 # %%
-self = _analysis('20230531/0.8', 0.8)
-data = self.data
-train = data.sel(rows=data.train)
-
-# %%
 from . import _scale1
 from ..svd import SVD
+from types import SimpleNamespace as namespace
 
-crispr, expr, cnv = [
-    _scale1(x).rename('data').reset_coords(['center', 'scale'])
-    for x in [train.crispr, train.expr, train.cnv]
-]
+class _analysis1:
+    def __init__(self, prev, name):
+        self.prev = prev
+        self.name = name
 
-cnv_svd = SVD.from_mat(cnv.data).inv()
-cnv_svd = xa.merge([cnv_svd.v.rename('u'), cnv_svd.us.rename('vs')])
-cnv_svd = cnv_svd.sel(pc=range(205)).persist()
-cnv_svd = cnv_svd.assign(
-    src=lambda x: ('pc', ['cnv']*x.sizes['pc']),
-    src_pc=lambda x: ('pc', ['cnv:'+x for x in x.pc.astype(str).data]),
-).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
+    @compose(property, lazy)
+    def storage(self):
+        return self.prev.storage/self.name
+    
+    def fit(self, x1, x2=None):
+        x3 = [x1.data]
+        if x2:
+            x3 = x3 + [x2.data]
+        x3 = [
+            _scale1(x).rename('data').reset_coords(['center', 'scale'])
+            for x in x3
+        ]
 
-proj1 = cnv_svd.u @ expr.data
+        svd1 = SVD.from_mat(x3[0].data).inv()
+        svd1 = xa.merge([svd1.v.rename('u'), svd1.us.rename('vs')])
+        svd1 = svd1.sel(pc=range(x1.pc)).persist()
+        svd1 = svd1.assign(
+            src=lambda x: ('pc', [x1.src]*x.sizes['pc']),
+            src_pc=lambda x: ('pc', [x1.src+':'+x for x in x.pc.astype(str).data]),
+        ).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
+        svd1 = xa.merge([svd1, x3[0].drop('data')])
 
-expr_svd = expr.data - cnv_svd.u @ proj1
-expr_svd = SVD.from_mat(expr_svd).inv()
-expr_svd = xa.merge([expr_svd.v.rename('u'), expr_svd.us.rename('vs')])
-expr_svd = expr_svd.sel(pc=range(100)).persist()
-expr_svd = expr_svd.assign(
-    src=lambda x: ('pc', ['expr']*x.sizes['pc']),
-    src_pc=lambda x: ('pc', ['expr:'+x for x in x.pc.astype(str).data]),
-).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
+        self.svd1 = svd1
 
-expr_svd1 = SVD.from_mat(expr.data).inv()
-expr_svd1 = xa.merge([expr_svd1.v.rename('u'), expr_svd1.us.rename('vs')])
-expr_svd1 = expr_svd1.sel(pc=range(205)).persist()
-expr_svd1 = expr_svd1.assign(
-    src=lambda x: ('pc', ['expr']*x.sizes['pc']),
-    src_pc=lambda x: ('pc', ['expr:'+x for x in x.pc.astype(str).data]),
-).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
+        if x2:
+            proj = svd1.u @ x3[1].data
+            svd2 = x3[1].data - svd1.u @ proj
+            svd2 = SVD.from_mat(svd2).inv()
+            svd2 = xa.merge([svd2.v.rename('u'), svd2.us.rename('vs')])
+            svd2 = svd2.sel(pc=range(x2.pc)).persist()
+            svd2 = svd2.assign(
+                src=lambda x: ('pc', [x2.src]*x.sizes['pc']),
+                src_pc=lambda x: ('pc', [x2.src+':'+x for x in x.pc.astype(str).data]),
+            ).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
+            svd2['proj'] = proj
+            svd2 = xa.merge([svd2, x3[1].drop('data')])
+            self.svd2 = svd2
 
-proj2 = expr_svd1.u @ cnv.data
+        return self
+        
+    def gmm(self, k, min_s):
+        x = self.svd1.u
+        if hasattr(self, 'svd2'):
+            x = xa.concat([x, self.svd2.u], dim='src_pc').transpose('rows', 'src_pc')
+        while True:    
+            g = GMM(k).fit(x)
+            s = g._fit.p.sum(dim='rows')
+            print(s.data)
+            if np.all(s>min_s):
+                break
+        return g
 
-cnv_svd1 = cnv.data - expr_svd1.u @ proj2
-cnv_svd1 = SVD.from_mat(cnv_svd1).inv()
-cnv_svd1 = xa.merge([cnv_svd1.v.rename('u'), cnv_svd1.us.rename('vs')])
-cnv_svd1 = cnv_svd1.sel(pc=range(100)).persist()
-cnv_svd1 = cnv_svd1.assign(
-    src=lambda x: ('pc', ['cnv']*x.sizes['pc']),
-    src_pc=lambda x: ('pc', ['cnv:'+x for x in x.pc.astype(str).data]),
-).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
 
 # %%
-x = xa.concat([cnv_svd.u, expr_svd.u], dim='src_pc').transpose('rows', 'src_pc')
-while True:    
-    g = GMM(2).fit(x)
-    s = g._fit.p.sum(dim='rows')
-    print(s.data)
-    if np.all(s>100):
-        break
+self = _analysis('20230531/0.8', 0.8)
+data = self.data2.persist()
 
 # %%
-data1 = self.data1
+train = data.sel(rows=data.train).drop('train')
+train = train.sel(rows=train.src=='dm').drop('src')
+train = train.sel(crispr_rows=train.rows).drop('crispr_rows')
+train = train.persist()
 
 # %%
-test = data1
+a1 = _analysis1(self, 'a1').fit(
+    namespace(
+        data=train.cnv,
+        src='cnv',
+        pc=205
+    ),
+    namespace(
+        data=train.expr,
+        src='expr',
+        pc=100
+    )
+)
 
-cnv1 = (test.cnv-cnv.center)/cnv.scale
-expr1 = (test.expr-expr.center)/expr.scale
+a2 = _analysis1(self, 'a2').fit(
+    namespace(
+        data=train.expr,
+        src='expr',
+        pc=205
+    ),
+    namespace(
+        data=train.cnv,
+        src='cnv',
+        pc=100
+    )
+)
 
-cnv2 = cnv1 @ cnv_svd.vs
-expr2 = expr1 @ expr_svd1.vs
+a3 = _analysis1(self, 'a3').fit(
+    namespace(
+        data=train.cnv,
+        src='cnv',
+        pc=205
+    )
+)
 
-expr3 = expr1 - proj1 @ cnv2
-expr3 @= expr_svd.vs
+a4 = _analysis1(self, 'a4').fit(
+    namespace(
+        data=train.expr,
+        src='expr',
+        pc=205
+    )
+)
 
-cnv3 = cnv1 - proj2 @ expr2
-cnv3 @= cnv_svd1.vs
+# %%
+g = a1.gmm(2, 100)
+
+# %%
+test = data
+test['train1'] = xa.where(
+    test.src=='gdc', 
+    'gdc', 
+    test[['src', 'train']].to_dataframe().pipe(lambda x: x.src+':'+x.train.astype(str)).to_xarray()
+)
+
+cnv1 = (test.cnv-a1.svd1.center)/a1.svd1.scale
+expr1 = (test.expr-a1.svd2.center)/a1.svd2.scale
+
+cnv2 = cnv1 @ a1.svd1.vs
+expr2 = expr1 @ a2.svd1.vs
+
+expr3 = expr1 - a1.svd2.proj @ cnv2
+expr3 @= a1.svd2.vs
+
+cnv3 = cnv1 - a2.svd2.proj @ expr2
+cnv3 @= a2.svd2.vs
 
 # %%
 test1 = xa.concat([cnv2, expr3], dim='src_pc').persist().rename('x').to_dataset()
@@ -153,15 +213,14 @@ test1['log_score'], test1['log_proba'] = g.log_proba(test1.x)
 test1 = test1.persist()
 
 # %%
-x1 = xa.merge([test1.log_score, test.train]).to_dataframe().reset_index()
+x1 = xa.merge([test1.log_score, test.train1]).to_dataframe().reset_index()
 (
-    p9.ggplot(x1)+p9.aes('train', 'np.clip(log_score, -20000, 1000)')+
+    p9.ggplot(x1)+p9.aes('train1', 'np.clip(log_score, -20000, 1000)')+
         p9.geom_violin()
 )
 
 # %%
-x = xa.concat([cnv_svd.u], dim='src_pc').transpose('rows', 'src_pc')
-g1 = GMM(1).fit(x)
+g1 = a3.gmm(1, 0)
 
 # %%
 test2 = xa.concat([cnv2], dim='src_pc').persist().rename('x').to_dataset()
@@ -169,15 +228,14 @@ test2['log_score'], test2['log_proba'] = g1.log_proba(test2.x)
 test2 = test2.persist()
 
 # %%
-x1 = xa.merge([test2.log_score, test.train]).to_dataframe().reset_index()
+x1 = xa.merge([test2.log_score, test.train1]).to_dataframe().reset_index()
 (
-    p9.ggplot(x1)+p9.aes('train', 'np.clip(log_score, -20000, 1000)')+
+    p9.ggplot(x1)+p9.aes('train1', 'np.clip(log_score, -20000, 1000)')+
         p9.geom_violin()
 )
 
 # %%
-x = xa.concat([expr_svd1.u], dim='src_pc').transpose('rows', 'src_pc')
-g2 = GMM(1).fit(x)
+g2 = a4.gmm(1, 0)
 
 # %%
 test3 = xa.concat([expr2], dim='src_pc').persist().rename('x').to_dataset()
@@ -185,20 +243,14 @@ test3['log_score'], test3['log_proba'] = g2.log_proba(test3.x)
 test3 = test3.persist()
 
 # %%
-x1 = xa.merge([test3.log_score, test.train]).to_dataframe().reset_index()
+x1 = xa.merge([test3.log_score, test.train1]).to_dataframe().reset_index()
 (
-    p9.ggplot(x1)+p9.aes('train', 'np.clip(log_score, -20000, 1000)')+
+    p9.ggplot(x1)+p9.aes('train1', 'np.clip(log_score, -20000, 1000)')+
         p9.geom_violin()
 )
 
 # %%
-x = xa.concat([expr_svd1.u, cnv_svd1.u], dim='src_pc').transpose('rows', 'src_pc')
-while True:    
-    g3 = GMM(1).fit(x)
-    s = g3._fit.p.sum(dim='rows')
-    print(s.data)
-    if np.all(s>100):
-        break
+g3 = a2.gmm(1, 0)
 
 # %%
 test4 = xa.concat([expr2, cnv3], dim='src_pc').persist().rename('x').to_dataset()
@@ -206,9 +258,9 @@ test4['log_score'], test4['log_proba'] = g1.log_proba(test2.x)
 test4 = test4.persist()
 
 # %%
-x1 = xa.merge([test4.log_score, test.train]).to_dataframe().reset_index()
+x1 = xa.merge([test4.log_score, test.train1]).to_dataframe().reset_index()
 (
-    p9.ggplot(x1)+p9.aes('train', 'np.clip(log_score, -20000, 1000)')+
+    p9.ggplot(x1)+p9.aes('train1', 'np.clip(log_score, -20000, 1000)')+
         p9.geom_violin()
 )
 
