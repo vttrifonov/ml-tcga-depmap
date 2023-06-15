@@ -117,6 +117,21 @@ class _analysis1:
             self.svd2 = svd2
 
         return self
+
+    def proj(self, x1, x2 = None):
+        x1 = (x1 - self.svd1.center)/self.svd1.scale
+        x1 @= self.svd1.vs
+        x3 = [x1]
+
+        if hasattr(self, 'svd2'):
+            x2 = (x2 - self.svd2.center)/self.svd2.scale
+            x2 -= self.svd2.proj @ x1
+            x2 @= self.svd2.vs
+            x3 += [x2]
+
+        x3 = xa.concat(x3, dim='src_pc')
+        return x3
+            
         
     def gmm(self, k, min_s):
         x = self.svd1.u
@@ -141,51 +156,33 @@ train = train.sel(rows=train.src=='dm').drop('src')
 train = train.sel(crispr_rows=train.rows).drop('crispr_rows')
 train = train.persist()
 
-# %%
-a1 = _analysis1(self, 'a1').fit(
-    namespace(
-        data=train.cnv,
-        src='cnv',
-        pc=205
-    ),
-    namespace(
-        data=train.expr,
-        src='expr',
-        pc=100
-    )
-)
-
-a2 = _analysis1(self, 'a2').fit(
-    namespace(
-        data=train.expr,
-        src='expr',
-        pc=205
-    ),
-    namespace(
-        data=train.cnv,
-        src='cnv',
-        pc=100
-    )
-)
-
-a3 = _analysis1(self, 'a3').fit(
-    namespace(
-        data=train.cnv,
-        src='cnv',
-        pc=205
-    )
-)
-
-a4 = _analysis1(self, 'a4').fit(
-    namespace(
-        data=train.expr,
-        src='expr',
-        pc=205
-    )
-)
+a1, a2, a3, a4 = [
+    _analysis1(self, n).fit(*(
+        namespace(
+            data=train[src],
+            src=src,
+            pc=pc
+        )
+        for src, pc in a
+    ))
+    for n, a in [
+        ('a1', [('cnv', 205), ('expr', 100)]),
+        ('a2', [('expr', 205), ('cnv', 100)]),
+        ('a3', [('cnv', 205)]),
+        ('a4', [('expr', 205)])
+    ]
+]
 
 # %%
-g = a1.gmm(2, 100)
+g, g1, g2, g3 = [
+    a.gmm(*x)
+    for a, x in [
+        (a1, (2, 100)), 
+        (a3, (1, 0)),
+        (a4, (1, 0)),
+        (a2, (1, 100))
+    ]
+]
 
 # %%
 test = data
@@ -195,20 +192,9 @@ test['train1'] = xa.where(
     test[['src', 'train']].to_dataframe().pipe(lambda x: x.src+':'+x.train.astype(str)).to_xarray()
 )
 
-cnv1 = (test.cnv-a1.svd1.center)/a1.svd1.scale
-expr1 = (test.expr-a1.svd2.center)/a1.svd2.scale
-
-cnv2 = cnv1 @ a1.svd1.vs
-expr2 = expr1 @ a2.svd1.vs
-
-expr3 = expr1 - a1.svd2.proj @ cnv2
-expr3 @= a1.svd2.vs
-
-cnv3 = cnv1 - a2.svd2.proj @ expr2
-cnv3 @= a2.svd2.vs
-
 # %%
-test1 = xa.concat([cnv2, expr3], dim='src_pc').persist().rename('x').to_dataset()
+
+test1 = a1.proj(test.cnv, test.expr).persist().rename('x').to_dataset()
 test1['log_score'], test1['log_proba'] = g.log_proba(test1.x)
 test1 = test1.persist()
 
@@ -220,10 +206,7 @@ x1 = xa.merge([test1.log_score, test.train1]).to_dataframe().reset_index()
 )
 
 # %%
-g1 = a3.gmm(1, 0)
-
-# %%
-test2 = xa.concat([cnv2], dim='src_pc').persist().rename('x').to_dataset()
+test2 = a3.proj(test.cnv).persist().rename('x').to_dataset()
 test2['log_score'], test2['log_proba'] = g1.log_proba(test2.x)
 test2 = test2.persist()
 
@@ -235,10 +218,7 @@ x1 = xa.merge([test2.log_score, test.train1]).to_dataframe().reset_index()
 )
 
 # %%
-g2 = a4.gmm(1, 0)
-
-# %%
-test3 = xa.concat([expr2], dim='src_pc').persist().rename('x').to_dataset()
+test3 = a4.proj(test.expr).persist().rename('x').to_dataset()
 test3['log_score'], test3['log_proba'] = g2.log_proba(test3.x)
 test3 = test3.persist()
 
@@ -250,11 +230,8 @@ x1 = xa.merge([test3.log_score, test.train1]).to_dataframe().reset_index()
 )
 
 # %%
-g3 = a2.gmm(1, 0)
-
-# %%
-test4 = xa.concat([expr2, cnv3], dim='src_pc').persist().rename('x').to_dataset()
-test4['log_score'], test4['log_proba'] = g1.log_proba(test2.x)
+test4 = a2.proj(test.expr, test.cnv).persist().rename('x').to_dataset()
+test4['log_score'], test4['log_proba'] = g3.log_proba(test2.x)
 test4 = test4.persist()
 
 # %%
