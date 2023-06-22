@@ -9,127 +9,9 @@ __package__ = 'ml_tcga_depmap.playground12'
 import plotnine as p9
 import xarray as xa
 import numpy as np
-from . import _analysis
 
 # %%
-from ..common.caching import compose, lazy, PickleCache
-from . import storage, DictCache
-from uuid import uuid4 as uuid
-from weakref import ref
-
-class FromStorage:
-    def __init__(self, *args, __restoring__=False, **kwargs):
-        if __restoring__:
-            return
-        super().__init__(*args, **kwargs)
-
-    @classmethod
-    def from_storage(cls, elems):
-        self = cls(__restoring__=True)
-        for k, v in elems.items():
-            setattr(self, k, v)
-        return self
-
-class ObjectCache(DictCache):    
-    cached_data = {}
-    cache_id_cache = PickleCache()
-
-    def __init__(self, cls, **elem):
-        super().__init__(
-            __cache_id__ = self.cache_id_cache, 
-            **elem
-        )
-        self.cls = cls
-
-    def store(self, data, storage):
-        if not hasattr(data, '__cache_id__'):
-            data.__cache_id__ = uuid()
-            self.cached_data[data.__cache_id__] = ref(data)
-        super().store(data.__dict__, storage)
-
-    def restore(self, storage):
-        data = self.cls(super().restore(storage))
-        self.cached_data[data.__cache_id__] = ref(data)
-        return data
-        
-class ObjectRefCache(PickleCache):
-    def store(self, data, storage):
-        super().store(data.__cache_id__, storage)
-
-    def restore(self, storage):
-        id = super().restore(storage)
-        return ObjectCache.cached_data[id]()
-
-# %%
-class A:
-    def __init__(self, b):
-        self.b = b
-
-    def fit(self, a):
-        self.a = a
-        return self
-
-class B:
-    A = A
-
-    def __init__(self, b):
-        self.b = b
-
-    @compose(property, lazy)
-    def a(self):
-        return self.A(self)
-
-class C:
-    B = B
-    
-    def __init__(self, a, b):
-        self.b = self.B(b)
-        self.a = self.b.a.fit(a)
-        
-! rm -rf ../.cache/playground12/c
-
-class C1(FromStorage, C):
-    class B(FromStorage, B):
-        class A(FromStorage, A):
-            pass
-
-C1.B.cache = ObjectCache(
-    C1.B.from_storage,
-    b = PickleCache()
-)
-
-C1.B.A.cache = ObjectCache(
-    C1.B.A.from_storage,
-    b = ObjectRefCache(),
-    a = PickleCache()
-)
-
-C1.cache = ObjectCache(
-    C1.from_storage,
-    b = C1.B.cache,
-    a = C1.B.A.cache
-)
-
-class D:
-    storage = storage/'d'
-    @compose(property, lazy, C1.cache)
-    def c(self):
-        return C1(2, 3)
-
-
-# %% [markdown]
-# 
-# c = C1(2, 3)
-# print(c.a.a, c.b.b)
-# 
-# c.cache.store(c, storage/'c')
-# 
-# ObjectCache.cached = {}
-# 
-# d = c.cache.restore(storage/'c')
-# print(d.a.a, d.b.b)
-
-# %%
+from . import _analysis, ObjectCache, ObjectRefCache
 from ..common.caching import compose, lazy, XArrayCache, PickleCache
 
 class GMM:
@@ -163,6 +45,12 @@ class GMM:
         x3['u'] = xa.DataArray(u, [x3.clust, d[0], x3.pc])
         x3['v'] = xa.DataArray(vt, [x3.clust, x3.pc, d[1]])
         x3['s'] = 1/(x3.s+1e-3)
+
+        #x3['vs'] = x3.v * x3.s
+        #x3['pu'] = np.sqrt(x3.p) * x3.u
+        #log_det = np.log(x3.s).sum(dim='pc')
+        #n_features = x1.shape[1]
+        #norm_factor = -0.5*np.log(2*np.pi)*n_features+log_det
         
         self._fit = x3
         self._dims = tuple(x.name for x in d)
@@ -468,6 +356,9 @@ _test.plot2 = _test_plot2
 
 # %%
 self = _analysis('20230531/0.8', 0.8)
+
+# %%
+self.model4.a1
 
 # %%
 self = _analysis('20230531/0.8', 0.8)

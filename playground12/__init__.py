@@ -15,6 +15,8 @@ import importlib
 import dask_ml.preprocessing as dmlp
 import plotly.express as px
 import dask
+from uuid import uuid4 as uuid
+from weakref import ref
 
 from ..svd import SVD
 from ..merge import merge
@@ -617,3 +619,45 @@ class _analysis:
         
 
 # %%
+class FromStorage:
+    def __init__(self, *args, __restoring__=False, **kwargs):
+        if __restoring__:
+            return
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def from_storage(cls, elems):
+        self = cls(__restoring__=True)
+        for k, v in elems.items():
+            setattr(self, k, v)
+        return self
+
+class ObjectCache(DictCache):    
+    cached_data = {}
+    cache_id_cache = PickleCache()
+
+    def __init__(self, cls, **elem):
+        super().__init__(
+            __cache_id__ = self.cache_id_cache, 
+            **elem
+        )
+        self.cls = cls
+
+    def store(self, data, storage):
+        if not hasattr(data, '__cache_id__'):
+            data.__cache_id__ = uuid()
+            self.cached_data[data.__cache_id__] = ref(data)
+        super().store(data.__dict__, storage)
+
+    def restore(self, storage):
+        data = self.cls(super().restore(storage))
+        self.cached_data[data.__cache_id__] = ref(data)
+        return data
+        
+class ObjectRefCache(PickleCache):
+    def store(self, data, storage):
+        super().store(data.__cache_id__, storage)
+
+    def restore(self, storage):
+        id = super().restore(storage)
+        return ObjectCache.cached_data[id]()
