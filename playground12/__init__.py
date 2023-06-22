@@ -24,23 +24,25 @@ from ..common.caching import FileCache
 
 class DictCache(FileCache):
     def __init__(self, *default, **elem):
-        super().__init__(True, '')
+        super().__init__(True, '')        
+        self.elem = {k: (i, v) for i, (k, v) in enumerate(elem.items())}
         self.default = default[0] if len(default)>0 else None
-        self.elem = elem
+        self.default = (len(elem), self.default)
 
     def store(self, data, storage):
         for k, v in data.items():
-            s = self.elem.get(k, self.default)
+            i, s = self.elem.get(k, self.default)            
             if s is not None:
-                s.store(v, storage/str(k))
-
+                s.store(v, storage/f'{i}.{k}')
+        
     def restore(self, storage):
         data = {}
-        for k in storage.glob('*'):
-            k = k.name
-            s = self.elem.get(k, self.default)
+        ks = (k.name.split('.') for k in storage.glob('*'))
+        ks = ((int(i), k) for i, k in ks)
+        for _, k in sorted(ks):
+            i, s = self.elem.get(k, self.default)
             if s is not None:
-                data[k] = s.restore(storage/k)
+                data[k] = s.restore(storage/f'{i}.{k}')
         return data
 
 class ArrayCache(FileCache):
@@ -69,7 +71,7 @@ class ClassCache(DictCache):
 
     def restore(self, storage):
         return self.cls(**super().restore(storage))
-
+    
 # %%
 
 pd.set_option('display.max_rows', 500)
@@ -572,15 +574,22 @@ class _analysis:
                 for e in ['dm_expr', 'gdc_expr']
             ], dim='rows').rename(data='expr', cols='expr_cols'),
             xa.concat([
-                getattr(merge, e)[['data', 'arm']]
+                getattr(merge, e)[['data']]
                 for e in ['dm_cnv', 'gdc_cnv']
             ], dim='rows').rename(data='cnv', cols='cnv_cols')
         ], join='inner', compat='override')
-        data = data.set_coords('arm')
         for x in ['expr', 'cnv']:
             data[x] = data[x].astype(np.float32)
         data['train'] = self.train_split.train
         data['train'] = data.train.where(data.rows.isin(merge.crispr.rows), 2).astype(str)
+        data = data.unify_chunks()
+        data = data.chunk({
+            'rows': 'auto',
+            'expr_cols': 'auto',
+            'cnv_cols': 'auto'
+        })
+        data['arm'] = merge.dm_cnv.arm.rename(cols='cnv_cols')
+        data = data.set_coords('arm')
         return data
     
     @property
