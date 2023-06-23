@@ -54,15 +54,16 @@ class GMM:
         n_features = x1.shape[1]
         x3['norm_factor'] = -0.5*np.log(2*np.pi)*n_features+log_det
 
-        x3 = x3.transpose('clust', x1.dims[0], 'pc', x1.dims[1])
+        x3 = x3.transpose('clust', d[0].name, 'pc', d[1].name)
 
         self._fit = x3.drop(['u', 's', 'v', 'p'])
 
         return self
     
     def proj(self, x):
-        x = x - self._fit.m
-        x = xa.dot(x, self._fit.vs, dims=self._fit.vs.dims[2])
+        f = self._fit
+        x = x - f.m
+        x = xa.dot(x, f.vs, dims=f.vs.dims[2])
         return x
     
     def _log_proba(self, proj):
@@ -95,9 +96,9 @@ class GMM:
             return self
 
         def predict(self, x):
-            gmm = self.gmm
-            pred = gmm.proj(x)
-            log_score, prob = gmm._log_proba(pred)
+            g = self.gmm
+            pred = g.proj(x)
+            log_score, prob = g._log_proba(pred)
             prob = np.exp(prob)
             pred = xa.dot(pred, self.proj, dims='pc')
             pred = xa.dot(pred, np.sqrt(prob), dims='clust')
@@ -257,6 +258,7 @@ class _model4:
     def storage(self):
         return self.prev.storage/'model4'
 
+    @compose(lazy, Model4.cache)
     def model(self, a):
         g, a = self.a[a]
         train = self.train
@@ -269,10 +271,6 @@ class _model4:
             for src, pc in a
         ))
         return model
-
-    @compose(property, lazy, Model4.cache)
-    def a1(self):
-        return self.model('a1')
 
 @compose(property, lazy)
 def _analysis_model4(self):
@@ -317,9 +315,10 @@ class _test:
 
         return x2
 
+@compose(lazy)
 def _model4_test(self, a):
     return _test(
-        getattr(self, a), 
+        self.model(a),
         self.test,
         [src for src, _ in self.a[a][1]]
     )
@@ -347,13 +346,7 @@ _test.plot2 = _test_plot2
 self = _analysis('20230531/0.8', 0.8)
 
 # %%
-del self.__lazy___analysis_model4
-
-# %%
-self.model4.a1
-
-# %%
-a1, = [self.model4.test1(a) for a in ['a1']]
+a1, a2, a3, a4 = (self.model4.test1(a) for a in ['a1', 'a2', 'a3', 'a4'])
 
 # %%
 a1.plot1()
