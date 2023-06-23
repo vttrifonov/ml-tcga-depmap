@@ -9,6 +9,7 @@ __package__ = 'ml_tcga_depmap.playground12'
 import plotnine as p9
 import xarray as xa
 import numpy as np
+import dask
 
 # %%
 from . import _analysis, ObjectCache, ObjectRefCache
@@ -46,44 +47,26 @@ class GMM:
         x3['v'] = xa.DataArray(vt, [x3.clust, x3.pc, d[1]])
         x3['s'] = 1/(x3.s+1e-3)
 
-        #x3['vs'] = x3.v * x3.s
-        #x3['pu'] = np.sqrt(x3.p) * x3.u
-        #log_det = np.log(x3.s).sum(dim='pc')
-        #n_features = x1.shape[1]
-        #norm_factor = -0.5*np.log(2*np.pi)*n_features+log_det
-        
-        self._fit = x3
-        self._dims = tuple(x.name for x in d)
+        x3['vs'] = x3.v * x3.s
+        x3['pu'] = np.sqrt(x3.p) * x3.u
+        x3['w'] = x3.p.sum(dim=x1.dims[0])
+        log_det = np.log(x3.s).sum(dim='pc')
+        n_features = x1.shape[1]
+        x3['norm_factor'] = -0.5*np.log(2*np.pi)*n_features+log_det
+
+        x3 = x3.transpose('clust', x1.dims[0], 'pc', x1.dims[1])
+
+        self._fit = x3.drop(['u', 's', 'v', 'p'])
 
         return self
     
-    @compose(property, lazy)
-    def vs(self):
-        return self._fit.v * self._fit.s
-
-    @compose(property, lazy)
-    def pu(self):
-        return np.sqrt(self._fit.p) * self._fit.u
-    
-    @compose(property, lazy)
-    def n_features(self):
-        return self._fit.sizes[self._dims[1]]
-
-    @compose(property, lazy)
-    def log_det(self):
-        return np.log(self._fit.s).sum(dim='pc')
-    
-    @compose(property, lazy)
-    def norm_factor(self):
-        return -0.5*np.log(2*np.pi)*self.n_features+self.log_det
-
     def proj(self, x):
         x = x - self._fit.m
-        x = xa.dot(x, self.vs, dims=self._dims[1])
+        x = xa.dot(x, self._fit.vs, dims=self._fit.vs.dims[2])
         return x
     
     def _log_proba(self, proj):
-        log_proba = self.norm_factor - 0.5*(proj**2).sum(dim='pc')
+        log_proba = self._fit.norm_factor - 0.5*(proj**2).sum(dim='pc')
         m = log_proba.max(dim='clust')
         log_proba -= m
         log_score = np.log(np.exp(log_proba).sum(dim='clust'))
@@ -108,25 +91,24 @@ class GMM:
             return self
 
         def fit(self, y):
-            self.proj = self.gmm.pu @ y
+            self.proj = self.gmm._fit.pu @ y
             return self
 
         def predict(self, x):
             gmm = self.gmm
-            x = gmm.proj(x)
-            log_score, prob = gmm._log_proba(x)
+            pred = gmm.proj(x)
+            log_score, prob = gmm._log_proba(pred)
             prob = np.exp(prob)
-            x = xa.dot(x, self.proj, dims='pc')
-            x = xa.dot(x, np.sqrt(prob), dims='clust')
-            return log_score, x
+            pred = xa.dot(pred, self.proj, dims='pc')
+            pred = xa.dot(pred, np.sqrt(prob), dims='clust')
+            return log_score, pred
 
     def solver(self):
         return self._solver(self)
 
 GMM.cache = ObjectCache(
     GMM.from_storage,
-    _fit = XArrayCache(),
-    _dims = PickleCache()
+    _fit = XArrayCache()
 )
 
 GMM._solver.cache = ObjectCache(
@@ -197,7 +179,7 @@ class Model4:
         k, min_s = self.gmm_params
         while True:    
             g = self.GMM(k).fit(u)
-            s = g._fit.p.sum(dim='rows')
+            s = g._fit.w
             print(s.data)
             if np.all(s>min_s):
                 break
@@ -215,7 +197,7 @@ class Model4:
         x3 = [x1]
 
         if len(svd)>1:
-            x2 = (x2 - self.svd[1].center)/self.self.svd[1].scale
+            x2 = (x2 - self.svd[1].center)/self.svd[1].scale
             x2 -= self.svd[1].proj @ x1
             x2 @= self.svd[1].vs
             x3 += [x2]
@@ -251,11 +233,16 @@ class _model4:
     @compose(property, lazy)
     def train(self):
         data = self.data.drop('train1')
-        train = data.sel(rows=data.train).drop('train')
+        with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+            train = data.sel(rows=data.train).drop('train')
         train = train.sel(rows=train.src=='dm').drop('src')
         train = train.sel(crispr_rows=train.rows).drop('crispr_rows')
         train = train.persist()
         return train
+
+    @property
+    def test(self):
+        return self.data
 
     def __init__(self, prev):
         self.prev = prev
@@ -294,17 +281,6 @@ def _analysis_model4(self):
 _analysis.model4 = _analysis_model4
 
 # %%
-class _analysis1(Model4):
-    def __init__(self, prev, name, gmm_params):
-        self.prev = prev
-        self.name = name
-        super().__init__(gmm_params)
-
-    @compose(property, lazy)
-    def storage(self):
-        return self.prev.storage/self.name
-
-# %%
 class _test:
     def __init__(self, a, t, s):
         self.a = a
@@ -323,19 +299,32 @@ class _test:
 
     @compose(property, lazy)
     def data2(self):
-        x2 = xa.merge([
+        def cor(x, y):
+            c = xa.merge([x.rename('x'), y.rename('y')])
+            c -= c.mean(dim='rows')
+            c /= np.sqrt((c**2).sum(dim='rows'))
+            c = (c.x * c.y).sum(dim='rows')
+            return c
+        
+        x2 = xa.merge([            
             self.p.pred.rename('pred'), 
             self.t.crispr.rename('data').rename(crispr_rows='rows'),
             self.t.train1
-        ], join='inner').to_dataframe().reset_index()
-        x2 = x2.groupby(['crispr_cols', 'train1']).apply(lambda x: x[['pred', 'data']].corr().iloc[0,1]).rename('cor').reset_index()
+        ], join='inner')        
+        x2 = x2.groupby('train1').apply(lambda x: cor(x.data, x.pred))
+        x2 = x2.rename('cor').to_dataframe().reset_index()
         x2 = x2.pivot_table(index='crispr_cols', columns='train1', values='cor')
+
         return x2
 
-def _analysis1_test(self, test, src):
-    return _test(self, test, src)
+def _model4_test(self, a):
+    return _test(
+        getattr(self, a), 
+        self.test,
+        [src for src, _ in self.a[a][1]]
+    )
 
-_analysis1.test = _analysis1_test
+_model4.test1 = _model4_test
 
 # %%
 def _test_plot1(self):
@@ -358,64 +347,13 @@ _test.plot2 = _test_plot2
 self = _analysis('20230531/0.8', 0.8)
 
 # %%
+del self.__lazy___analysis_model4
+
+# %%
 self.model4.a1
 
 # %%
-self = _analysis('20230531/0.8', 0.8)
-data = self.data2.persist()
-
-# %%
-train = data.sel(rows=data.train).drop('train')
-train = train.sel(rows=train.src=='dm').drop('src')
-train = train.sel(crispr_rows=train.rows).drop('crispr_rows')
-train = train.persist()
-
-# %%
-test = data.copy()
-test['train1'] = xa.where(
-    test.src=='gdc', 
-    'gdc', 
-    test[['src', 'train']].to_dataframe().pipe(lambda x: x.src+':'+x.train.astype(str)).to_xarray()
-)
-
-# %%
-a1, a2, a3, a4 = [
-    _analysis1(self, n, g).fit(train.crispr, *(
-        namespace(
-            data=train[src],
-            src=src,
-            pc=pc
-        )
-        for src, pc in a
-    )) #.test(test, [src for src, _ in a])
-    for n, g, a in [
-        ('a1', (1, 100), [('cnv', 205), ('expr', 100)]),
-        ('a2', (1, 100), [('expr', 205), ('cnv', 100)]),
-        ('a3', (1, 0), [('cnv', 205)]),
-        ('a4', (1, 0), [('expr', 205)])
-    ]
-]
-
-# %%
-a1, a2, a3, a4 = [
-    _analysis1(self, n, g).fit(train.crispr, *(
-        namespace(
-            data=train[src],
-            src=src,
-            pc=pc
-        )
-        for src, pc in a
-    )) #.test(test, [src for src, _ in a])
-    for n, g, a in [
-        ('a1', (1, 100), [('cnv', 205), ('expr', 100)]),
-        ('a2', (1, 100), [('expr', 205), ('cnv', 100)]),
-        ('a3', (1, 0), [('cnv', 205)]),
-        ('a4', (1, 0), [('expr', 205)])
-    ]
-]
-
-# %%
-test1 = a1.test(test, ['cnv', 'expr'])
+a1, = [self.model4.test1(a) for a in ['a1']]
 
 # %%
 a1.plot1()
