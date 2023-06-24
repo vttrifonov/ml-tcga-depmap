@@ -713,7 +713,7 @@ class GMM:
 
         x3['vs'] = x3.v * x3.s
         x3['pu'] = np.sqrt(x3.p) * x3.u
-        x3['w'] = x3.p.sum(dim=x1.dims[0])
+        x3['w'] = x3.p.sum(dim=d[0].name)
         log_det = np.log(x3.s).sum(dim='pc')
         n_features = x1.shape[1]
         x3['norm_factor'] = -0.5*np.log(2*np.pi)*n_features+log_det
