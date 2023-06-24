@@ -700,9 +700,10 @@ class GMM:
         x3 = xa.Dataset()
         x3['m'] = xa.DataArray(x2.means_, [('clust', range(x2.n_components)), d[1]])
         x3['p'] = xa.DataArray(x2.predict_proba(x1.data), [d[0], x3.clust])
+        x3['w'] = x3.p.sum(dim=d[0].name)
 
         u = x1-x3.m
-        w = x3.p/x3.p.sum(dim=d[0].name)
+        w = x3.p/x3.w
         u = np.sqrt(w) * u
         u = u.transpose('clust', *x1.dims)
         u, s, vt = np.linalg.svd(u.values, full_matrices=False)
@@ -710,10 +711,9 @@ class GMM:
         x3['u'] = xa.DataArray(u, [x3.clust, d[0], x3.pc])
         x3['v'] = xa.DataArray(vt, [x3.clust, x3.pc, d[1]])
         x3['s'] = 1/(x3.s+1e-3)
-
         x3['vs'] = x3.v * x3.s
         x3['pu'] = np.sqrt(x3.p) * x3.u
-        x3['w'] = x3.p.sum(dim=d[0].name)
+        
         log_det = np.log(x3.s).sum(dim='pc')
         n_features = x1.shape[1]
         x3['norm_factor'] = -0.5*np.log(2*np.pi)*n_features+log_det
