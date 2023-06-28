@@ -93,6 +93,14 @@ def _scale1(d, rows=['rows']):
     d = d/d.scale
     return d
 
+def _scale2(d, rows=['rows']):
+    cols = list(set(d.dims)-set(rows))
+    d['center'] = (cols, d.mean(dim=rows))
+    d = d - d.center
+    d['scale'] = (cols, np.sqrt((d**2).sum(dim=rows)))
+    d = d/d.scale
+    return d
+
 def gmm(x1, k):
     from sklearn.mixture import GaussianMixture
 
@@ -918,3 +926,146 @@ def _analysis_model4(self):
     return _model4(self)
 
 _analysis.model4 = _analysis_model4
+
+# %%
+class Model5:
+    GMM = GMM
+    SVD = SVD
+    scale = staticmethod(_scale2)
+
+    def __init__(self, gmm_params = None, __restoring__ = False):
+        if __restoring__:
+            return
+        self.gmm_params = gmm_params
+
+    @classmethod
+    def from_storage(cls, elems):
+        self = cls(__restoring__=True)
+        for k, v in elems.items():
+            setattr(self, k, v)
+        return self
+    
+    def fit(self, y, x1, x2=None):
+        x3 = [y, x1.data]
+        if x2:
+            x3 = x3 + [x2.data]
+        x3 = [
+            self.scale(x).rename('data').reset_coords(['center', 'scale'])
+            for x in x3
+        ]
+        y, x3 = x3[0], x3[1:]
+
+        svd1 = self.SVD.from_mat(x3[0].data).xarray
+        svd1 = svd1.sel(pc=range(x1.pc)).persist()
+        svd1 = svd1.assign(
+            src=lambda x: ('pc', [x1.src]*x.sizes['pc']),
+            src_pc=lambda x: ('pc', [x1.src+':'+x for x in x.pc.astype(str).data]),
+        ).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
+        u1, s1 = svd1.u, svd1.s
+        u = u1 * s1
+        svd1 = xa.merge([svd1.v, x3[0].drop('data')])
+        self.svd = [svd1]
+
+        if x2:
+            svd1['proj'] = u1 @ x3[1].data
+            svd2 = x3[1].data - u1 @ svd1.proj
+            svd1['proj'] = (1/(s1+1e-3)) * svd1.proj
+            svd2 = self.SVD.from_mat(svd2).xarray
+            svd2 = svd2.sel(pc=range(x2.pc)).persist()
+            svd2 = svd2.assign(
+                src=lambda x: ('pc', [x2.src]*x.sizes['pc']),
+                src_pc=lambda x: ('pc', [x2.src+':'+x for x in x.pc.astype(str).data]),
+            ).set_coords(['src', 'src_pc']).swap_dims(pc='src_pc')
+            u = xa.concat([
+                u, svd2.u * svd2.s
+            ], dim='src_pc').transpose('rows', 'src_pc')
+            svd2 = xa.merge([
+                svd2.v, 
+                x3[1].drop('data')
+            ])
+            self.svd = self.svd + [svd2]
+
+        k, min_s = self.gmm_params
+        while True:    
+            g = self.GMM(k).fit(u)
+            s = g._fit.w
+            print(s.data)
+            if np.all(s>min_s):
+                break
+            
+        self.g = g
+        self.solver = g.solver().fit(y.data)
+        self.y = y.drop('data')
+        
+        return self
+
+    def predict(self, x1, x2=None):
+        svd = self.svd        
+        x1 = (x1 - svd[0].center)/svd[0].scale
+        x1 @= svd[0].v
+        x3 = [x1]
+
+        if len(svd)>1:
+            x2 = (x2 - svd[1].center)/svd[1].scale
+            x2 -= svd[0].proj @ x1
+            x2 @= svd[1].v
+            x3 += [x2]
+
+        x3 = xa.concat(x3, dim='src_pc')
+
+        log_score, pred = self.solver.predict(x3)
+        pred = pred*self.y.scale+self.y.center
+        return log_score, pred
+
+Model5.cache = ObjectCache(
+    Model5.from_storage,
+    svd = ArrayCache(XArrayCache()),
+    g = GMM.cache,
+    solver = GMM._solver.cache,
+    y = XArrayCache()
+)
+
+# %%
+class _model5: 
+    Model = Model5
+
+    @compose(property, lazy)
+    def train(self):
+        return self.prev.train.persist()
+
+    @compose(property, lazy)
+    def test(self):
+        return self.prev.data2.persist()
+
+    def __init__(self, prev):
+        self.prev = prev
+        self.a = {
+            'a1': ((1, 100), [('cnv', 205), ('expr', 100)]),
+            'a2': ((1, 100), [('expr', 205), ('cnv', 100)]),
+            'a3': ((1, 0), [('cnv', 205)]),
+            'a4': ((1, 0), [('expr', 205)]),
+        }
+
+    @compose(property, lazy)
+    def storage(self):
+        return self.prev.storage/'model5'
+
+    @compose(lazy, Model5.cache)
+    def model(self, a):
+        g, a = self.a[a]
+        train = self.train
+        model = self.Model(g).fit(train.crispr, *(
+            namespace(
+                data=train[src],
+                src=src,
+                pc=pc
+            )
+            for src, pc in a
+        ))
+        return model
+
+@compose(property, lazy)
+def _analysis_model5(self):
+    return _model5(self)
+
+_analysis.model5 = _analysis_model5

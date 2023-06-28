@@ -12,7 +12,8 @@ import numpy as np
 import dask
 
 from ..common.caching import compose, lazy
-from . import _model4, _analysis
+from . import _model5 as _model
+from . import _analysis
 
 # %%
 def cor(x, y):
@@ -47,17 +48,13 @@ class _test:
             self.p.pred.rename('pred'), 
             self.t.crispr.rename('data').rename(crispr_rows='rows'),
             self.t.train1
-        ], join='inner')        
+        ], join='inner')
         x2 = x2.groupby('train1').apply(lambda x: cor(x.data, x.pred))
         x2 = x2.rename('cor').to_dataframe().reset_index()
         x2 = x2.pivot_table(index='crispr_cols', columns='train1', values='cor')
         return x2
 
-@compose(lazy)
-def _model4_test(self, a):
-    return _test(self, a)
-
-_model4.test1 = _model4_test
+_model.test1 = compose(lazy)(lambda self, a: _test(self, a))
 
 # %%
 def _test_plot1(self):
@@ -80,7 +77,7 @@ _test.plot2 = _test_plot2
 analysis = _analysis('20230531/0.8', 0.8)
 
 # %%
-a1, a2, a3, a4 = (analysis.model4.test1(a) for a in ['a1', 'a2', 'a3', 'a4'])
+a1, a2, a3, a4 = (analysis.model5.test1(a) for a in ['a1', 'a2', 'a3', 'a4'])
 
 # %%
 a1.plot1()
@@ -105,5 +102,18 @@ a2.plot1()
 
 # %%
 a2.plot2()
+
+# %%
+x1 = a3.data2['dm:False'].rename('a')**2
+x2 = a4.data2['dm:False'].rename('b')**2
+x3 = x1.to_frame().join(x2)
+x3 = x3[(x3.a>0.1) | (x3.b>0.1)]
+(
+    p9.ggplot(x3)+
+        p9.aes('a', 'b')+
+        p9.geom_point(alpha=0.1)+
+        p9.geom_hline(yintercept=0.1)+
+        p9.geom_vline(xintercept=0.1)
+)
 
 
