@@ -95,9 +95,9 @@ def _scale1(d, rows=['rows']):
 
 def _scale2(d, rows=['rows']):
     cols = list(set(d.dims)-set(rows))
-    d['center'] = (cols, d.mean(dim=rows))
+    d['center'] = (cols, d.mean(dim=rows).data)
     d = d - d.center
-    d['scale'] = (cols, np.sqrt((d**2).sum(dim=rows)))
+    d['scale'] = (cols, np.sqrt((d**2).sum(dim=rows)).data)
     d = d/d.scale
     return d
 
@@ -554,14 +554,14 @@ class _analysis:
     def train_split_ratio(self):
         return self._train_split_ratio        
 
-    @compose(property, lazy, PickleCache(compressor=None))
+    @compose(property, lazy, XArrayCache())
     def train_split(self):
         rows = xa.concat([
             merge.dm_expr.rows, 
             merge.gdc_expr.rows
         ], dim='rows')
         rows['train'] = ('rows', np.random.random(rows.shape[0])<=self.train_split_ratio)
-        return rows
+        return rows.rename('train_split')
     
     @compose(property, lazy)
     def data(self):
