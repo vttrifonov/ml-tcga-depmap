@@ -553,15 +553,19 @@ class _analysis:
     @compose(property, lazy, PickleCache(compressor=None))
     def train_split_ratio(self):
         return self._train_split_ratio        
-
-    @compose(property, lazy, XArrayCache())
-    def train_split(self):
+    
+    @property
+    def _train_split(self):
         rows = xa.concat([
             merge.dm_expr.rows, 
             merge.gdc_expr.rows
         ], dim='rows')
         rows['train'] = ('rows', np.random.random(rows.shape[0])<=self.train_split_ratio)
         return rows.rename('train_split')
+
+    @compose(property, lazy, XArrayCache())
+    def train_split(self):
+        return self._train_split
     
     @compose(property, lazy)
     def data(self):
