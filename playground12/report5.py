@@ -10,7 +10,7 @@ import plotnine as p9
 import xarray as xa
 import numpy as np
 import pandas as pd
-import dask
+import dask as da
 import matplotlib.pyplot as plt
 
 from ..common.caching import compose, lazy
@@ -26,8 +26,9 @@ def dist(x4, d):
     def _(x5, x6):
         x5, x6 = [
             x.sel(src_train1=x.src_train.data[0]).\
-                drop(['src_train', 'src_train1']).\
-                rename(src_train_pc=f'src_train_pc{s}')
+                sel(rows=x.src_train2==x.src_train.data[0]).\
+                drop(['src_train', 'src_train1', 'src_train2']).\
+                rename(src_train_pc=f'src_train_pc{s}', rows=f'rows{s}')
             for x, s in [(x5, '1'), (x6, '2')]
         ]
         return d(x5, x6)
@@ -48,18 +49,37 @@ def kl(x5, x6):
     x9 = ((x5.m - x6.m) @ x6.v)/x6.s
     x9 = (x9**2).sum()
 
-    x10 = x6.sizes['src_train_pc2']
+    x10 = x5.sizes['src_train_pc1']
 
     x11 = np.log(x6.s).sum()-np.log(x5.s).sum()
 
-    return 0.5*(x8 + x9 - x10) + x11
+    x12 = np.log(2*np.pi)*(x6.sizes['src_train_pc2']-x5.sizes['src_train_pc1'])
+
+    return 0.5*(x12 + x8 + x9 - x10) + x11
 
 def w2(x5, x6):
     x7 = ((x5.m - x6.m)**2).sum(dim='cols1')
+
     x8 = (x5.s**2).sum()+(x6.s**2).sum()
+
     x9 = x5.s * (x5.v @ x6.v) * x6.s   
-    x9 = np.linalg.svd(x9, compute_uv=False).sum()
+    x9 = da.array.linalg.svd(x9.data)[1].sum()
+    
     return x7+x8-2*x9
+
+def log_prob(x5, x6):
+    x7 = ((x5-x6.m) @ x6.v)/x6.s
+    x7 = (x7**2).sum(dim='src_train_pc2').mean()
+
+    x8 = np.log(2*np.pi)*x6.sizes['src_train_pc2']
+
+    x9 = np.log(x6.s).sum()
+
+    return -0.5*(x8+x7)+x9
+
+def kl1(x5, x6):
+    return (-log_prob(x5.data, x6)+log_prob(x6.data, x6))
+
 
 # %%
 class _analysis1(_analysis):    
@@ -173,9 +193,18 @@ def x3_1(self):
 _analysis1.x3_1 = x3_1
 
 # %%
+@property
+def x4_1(self):
+    return xa.merge([
+        self.x3_1.drop('pc'), 
+        self.x2[['data', 'src_train']].rename(src_train='src_train2')
+    ])
+_analysis1.x4_1 = x4_1
+
+# %%
 @compose(property, lazy)
 def x9_1(self):
-    x4, d = (self.x3_1.drop('pc').compute(), kl)
+    x4, d = self.x4_1, kl
     return dist(x4, d)
 
 _analysis1.x9_1 = x9_1
@@ -183,13 +212,21 @@ _analysis1.x9_1 = x9_1
 # %%
 @compose(property, lazy)
 def x9_2(self):
-    x4, d = (self.x3_1.drop('pc').compute(), w2)
+    x4, d = self.x4_1, w2
     return dist(x4, d)
 
 _analysis1.x9_2 = x9_2
 
 # %%
-analysis1 = _analysis1('20230531/0.5', 0.5, src='expr', perm=True)
+@compose(property, lazy)
+def x9_3(self):    
+    x4, d = self.x4_1, kl1    
+    return dist(x4, d)
+
+_analysis1.x9_3 = x9_3
+
+# %%
+analysis1 = _analysis1('20230531/0.5', 0.5, src='expr', perm=False)
 self = analysis1
 
 # %%
@@ -206,6 +243,18 @@ x9 = analysis1.x9_1
 
 # %%
 x9 = analysis1.x9_2
+(
+    p9.ggplot(x9)+
+        p9.aes(
+            'src_train1', 'src_train2', 
+            fill='np.log10(dist+1)', label='dist.astype(int)'
+        )+
+        p9.geom_tile()+
+        p9.geom_text()
+)
+
+# %%
+x9 = analysis1.x9_3
 (
     p9.ggplot(x9)+
         p9.aes(
