@@ -52,9 +52,7 @@ def kl(x5, x6):
 
     x11 = np.log(x6.s).sum()-np.log(x5.s).sum()
 
-    x12 = 0.5*(x8 + x9 - x10) + x11
-    
-    return x12
+    return 0.5*(x8 + x9 - x10) + x11
 
 def w2(x5, x6):
     x7 = ((x5.m - x6.m)**2).sum(dim='cols1')
