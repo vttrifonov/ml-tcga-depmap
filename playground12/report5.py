@@ -82,7 +82,7 @@ def kl1(x5, x6):
 
 
 # %%
-class _analysis1(_analysis):    
+class _analysis5(_analysis):    
     def __init__(self, *args, src, perm):
         super().__init__(*args)
         self.src = src
@@ -108,7 +108,7 @@ def x1(self):
     x1 = xa.merge([x1.drop('data'), scale(x1.data).rename('data')], join='inner')
     x1 = x1.transpose('rows', 'cols')
     return x1
-_analysis1.x1 = x1
+_analysis5.x1 = x1
 
 # %%
 @compose(property, lazy)
@@ -120,7 +120,7 @@ def x2(self):
     x2['src_train'] = x2.src.to_series()+':'+x2.train.to_series().astype(str)
     x2 = x2.rename(pc='cols1')
     return x2
-_analysis1.x2 = x2
+_analysis5.x2 = x2
 
 # %%
 @compose(property, lazy)
@@ -142,7 +142,7 @@ def x3(self):
     x3 = xa.concat([_(n, x) for n, x in x3], dim='src_train')
     x3 = x3.persist()
     return x3
-_analysis1.x3 = x3
+_analysis5.x3 = x3
 
 # %%
 @compose(property, lazy)
@@ -164,7 +164,7 @@ def x9(self):
     x9 = 0.5*(x6 + x7 - x3.sizes['cols1'])+x8
     x9 = x9.rename('kl').to_dataframe().reset_index()
     return x9
-_analysis1.x9 = x9
+_analysis5.x9 = x9
 
 # %%
 @compose(property, lazy)
@@ -190,7 +190,7 @@ def x3_1(self):
     x3['s'] = np.sqrt(x3.s**2+1e-6)
     x3 = x3.persist()
     return x3
-_analysis1.x3_1 = x3_1
+_analysis5.x3_1 = x3_1
 
 # %%
 @property
@@ -199,7 +199,7 @@ def x4_1(self):
         self.x3_1.drop('pc'), 
         self.x2[['data', 'src_train']].rename(src_train='src_train2')
     ])
-_analysis1.x4_1 = x4_1
+_analysis5.x4_1 = x4_1
 
 # %%
 @compose(property, lazy)
@@ -207,7 +207,7 @@ def x9_1(self):
     x4, d = self.x4_1, kl
     return dist(x4, d)
 
-_analysis1.x9_1 = x9_1
+_analysis5.x9_1 = x9_1
 
 # %%
 @compose(property, lazy)
@@ -215,7 +215,7 @@ def x9_2(self):
     x4, d = self.x4_1, w2
     return dist(x4, d)
 
-_analysis1.x9_2 = x9_2
+_analysis5.x9_2 = x9_2
 
 # %%
 @compose(property, lazy)
@@ -223,14 +223,14 @@ def x9_3(self):
     x4, d = self.x4_1, kl1    
     return dist(x4, d)
 
-_analysis1.x9_3 = x9_3
+_analysis5.x9_3 = x9_3
 
 # %%
-analysis1 = _analysis1('20230531/0.5', 0.5, src='expr', perm=False)
-self = analysis1
+analysis5 = _analysis5('20230531/0.5', 0.5, src='expr', perm=False)
+self = analysis5
 
 # %%
-x9 = analysis1.x9_1
+x9 = analysis5.x9_1
 (
     p9.ggplot(x9)+
         p9.aes(
@@ -242,7 +242,7 @@ x9 = analysis1.x9_1
 )
 
 # %%
-x9 = analysis1.x9_2
+x9 = analysis5.x9_2
 (
     p9.ggplot(x9)+
         p9.aes(
@@ -254,7 +254,7 @@ x9 = analysis1.x9_2
 )
 
 # %%
-x9 = analysis1.x9_3
+x9 = analysis5.x9_3
 (
     p9.ggplot(x9)+
         p9.aes(

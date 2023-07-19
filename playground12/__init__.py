@@ -87,9 +87,9 @@ storage = config.cache/'playground12'
 # %%
 def _scale1(d, rows=['rows']):
     cols = list(set(d.dims)-set(rows))
-    d['center'] = (cols, d.mean(dim=rows))
+    d['center'] = (cols, d.mean(dim=rows).data)
     d = d - d.center
-    d['scale'] = (cols, np.sqrt((d**2).mean(dim=rows)))
+    d['scale'] = (cols, np.sqrt((d**2).mean(dim=rows)).data)
     d = d/d.scale
     return d
 
