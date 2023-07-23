@@ -590,39 +590,33 @@ class _analysis:
             xa.concat([
                 getattr(merge, e)[['data']]
                 for e in ['dm_cnv', 'gdc_cnv']
-            ], dim='rows').rename(data='cnv', cols='cnv_cols')
+            ], dim='rows').rename(data='cnv', cols='cnv_cols'),
+            merge.crispr[['data']].\
+                rename(data='crispr', rows='crispr_rows', cols='crispr_cols')
         ], join='inner', compat='override')
-        for x in ['expr', 'cnv']:
+        for x in ['expr', 'cnv', 'crispr']:
             data[x] = data[x].astype(np.float32)
-        data['train'] = self.train_split.train
-        data['train'] = data.train.where(data.rows.isin(merge.crispr.rows), 2).astype(str)
         data = data.unify_chunks()
         data = data.chunk({
             'rows': 'auto',
             'expr_cols': 'auto',
-            'cnv_cols': 'auto'
+            'cnv_cols': 'auto',
+            'crispr_cols': 'auto',
         })
         data['arm'] = merge.dm_cnv.arm.rename(cols='cnv_cols')
-        data = data.set_coords('arm')
+        data = data.set_coords('arm')        
+        data['src'] = xa.where(data.rows.isin(data.crispr_rows), 'dm', 'gdc')
         return data
     
     @property
     def data2(self):
-        data = self.data1.copy()
-        data['crispr'] = merge.crispr.data.rename(rows='crispr_rows', cols='crispr_cols')
-        data['src'] = xa.where(data.rows.isin(data.crispr_rows), 'dm', 'gdc')
-        data['train'] = self.train_split.train    
-        data['train1'] = xa.where(
-            data.src=='gdc', 
-            'gdc', 
-            data[['src', 'train']].to_dataframe().\
-                pipe(lambda x: x.src+':'+x.train.astype(str)).to_xarray()
-        )    
+        data = self.data1.copy()        
+        data['train'] = self.train_split.train
         return data
     
     @compose(property, lazy)
     def train(self):
-        data = self.data2.drop('train1')
+        data = self.data2.copy()
         with dask.config.set(**{'array.slicing.split_large_chunks': False}):
             train = data.sel(rows=data.train).drop('train')
         train = train.sel(rows=train.src=='dm').drop('src')

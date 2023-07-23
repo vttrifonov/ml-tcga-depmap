@@ -28,59 +28,82 @@ analysis6 = _analysis6('20230531/0.5', 0.5, src='expr')
 self = analysis6
 
 # %%
-data = self.data2
-
-# %%
-x1 = self.src
-x1 = data[['src', x1, 'crispr']].rename({
-    x1: 'data', 
-    f'{x1}_cols': 'cols',
+src = self.src
+data = self.data1
+data = data[['src', src, 'crispr']].rename({
+    src: 'x', 
+    'rows': 'x_rows',
+    f'{src}_cols': 'x_cols',    
     'crispr': 'y',
     'crispr_rows': 'y_rows',
     'crispr_cols': 'y_cols'
 }).persist()
-x1['train'] = self._train_split.train
-x1['y'] = x1.y.astype('float32')
+
+# %%
+x1 = data.copy()
+x1['train'] = self._train_split.train.rename(rows='x_rows')
 x1['src_train'] = x1.src.to_series()+':'+x1.train.to_series().astype(str)
 
 # %%
-x2 = x1[['data', 'train']].sel(rows=x1.src=='dm')
-x2 = x2.sel(rows=x2.train)
-x2['y'] = x1.y.rename(y_rows='rows')
-x2 = [
-    scale(x).\
-        rename('x').to_dataset().reset_coords(['center', 'scale']) 
-    for x in [x2.data, x2.y]
-]
-x2 = [
-    xa.merge([
-        x.center, x.scale,
-        SVD.from_mat(x.x).xarray
-    ])
-    for x in x2
-]
-x2 = [x.sel(pc=np.cumsum(x.s**2)/np.sum(x.s**2)<0.9) for x in x2]
-x2 = [x.rename(pc=cols).persist() for x, cols in zip(x2, ['cols1', 'y_cols1'])]
+x2 = x1.x.sel(x_rows=x1.train)
+x2 = scale(x2, rows=['x_rows']).rename('data').reset_coords(['center', 'scale']).persist()
+x3 = SVD.from_mat(x2.data, n=1000, solver='rand').xarray.persist()
+x3 = x3.sel(pc=(np.cumsum(x3.s**2)/np.sum(x2.data**2)<0.9).compute())
+x1 = xa.merge([
+    x1.drop_dims('x_cols'),
+    ((((x1.x-x2.center)/x2.scale)@x3.v)).rename('x', pc='x_cols')
+]).persist()
+
+# %%
+x2 = x1.train.sel(x_rows=x1.y_rows).drop('x_rows')
+x2 = x1.y.sel(y_rows=x2)
+x2 = scale(x2, rows=['y_rows']).rename('data').reset_coords(['center', 'scale']).persist()
+x3 = SVD.from_mat(x2.data, n=400, solver='rand').xarray.persist()
+x3 = x3.sel(pc=(np.cumsum(x3.s**2)/np.sum(x2.data**2)<0.9).compute())
+x1 = xa.merge([
+    x1.drop_dims('y_cols'),
+    ((((x1.y-x2.center)/x2.scale)@x3.v)).rename('y', pc='y_cols')
+]).persist()
+
+# %%
+x2 = x1[['x', 'y']].sel(x_rows=x1.src_train=='dm:True')
+x2 = x2.sel(y_rows=x2.x_rows).drop('y_rows')
+def _(x, cols):
+    m = x.mean(dim='x_rows')
+    x = x-m
+    s = np.sqrt((x**2).mean(dim='x_rows'))
+    x = x/s
+    x = SVD.from_mat(x).xarray
+    #x = x.sel(pc=np.cumsum(x.s**2)/np.sum(x.s**2)<0.9)
+    x = x.rename(pc=cols).persist()
+    return xa.merge([x, m.rename('center'), s.rename('scale')])
+x2 = [_(*x).persist() for x in zip([x2.x, x2.y], ['x_cols1', 'y_cols1'])]
+
+# %%
+x, d = x2[0], x1.x
+z1 = ((((d-x.center)/x.scale)@x.v)/x.s).compute()
+z1.groupby(x1.src_train).apply(lambda x: (x**2).sum(dim='x_cols1').mean(dim='x_rows'))
 
 # %%
 x3 = [
     ((((d-x.center)/x.scale) @ x.v)/x.s).persist()
-    for x, d in zip(x2, [x1.data, x1.y])
+    for x, d in zip(x2, [x1.x, x1.y])
 ]
 
 # %%
-x4 = (x3[0]**2).sum(dim='cols1').rename('log_prob')
+x4 = (x3[0]**2).sum(dim='x_cols1').rename('log_prob')
 x4['src_train'] = x1.src_train
 
 x5 = x2[0].u @ x2[1].u
+
 x6 = x3[0] @ x5
-x7 = xa.merge([
-    x6.rename('pred').rename(rows='y_rows'), 
+x6 = xa.merge([
+    x6.rename('pred').rename(x_rows='y_rows'), 
     x3[1].rename('obs'),
-    x1.train.rename(rows='y_rows')
+    x1.train.rename(x_rows='y_rows')
 ], join='inner').persist()
 
-x8 = x7.groupby('train').apply(lambda x: xa.merge([
+x8 = x6.groupby('train').apply(lambda x: xa.merge([
     ((x.obs-x.pred)**2).sum(dim='y_rows').rename('delta'),
     (x.obs**2).sum(dim='y_rows').rename('obs')
 ])).persist()

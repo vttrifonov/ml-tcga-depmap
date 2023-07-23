@@ -28,8 +28,8 @@ def dist(x4, d):
             x.sel(src_train1=x.src_train.data[0]).\
                 sel(rows=x.src_train2==x.src_train.data[0]).\
                 drop(['src_train', 'src_train1', 'src_train2']).\
-                rename(src_train_pc=f'src_train_pc{s}', rows=f'rows{s}')
-            for x, s in [(x5, '1'), (x6, '2')]
+                rename(src_train_pc='pc')
+            for x in [x5, x6]
         ]
         return d(x5, x6)
     x9 = xa.concat([
@@ -43,21 +43,27 @@ def dist(x4, d):
     return x9
 
 def kl(x5, x6): 
+    x5 = x5.rename(pc='pc1')
+    x6 = x6.rename(pc='pc2')
+
     x8 = x5.s * (x5.v @ x6.v) / x6.s
     x8 = (x8**2).sum()
 
     x9 = ((x5.m - x6.m) @ x6.v)/x6.s
     x9 = (x9**2).sum()
 
-    x10 = x5.sizes['src_train_pc1']
+    x10 = x5.sizes['pc1']
 
     x11 = np.log(x6.s).sum()-np.log(x5.s).sum()
 
-    x12 = np.log(2*np.pi)*(x6.sizes['src_train_pc2']-x5.sizes['src_train_pc1'])
+    x12 = np.log(2*np.pi)*(x6.sizes['pc2']-x5.sizes['pc1'])
 
     return 0.5*(x12 + x8 + x9 - x10) + x11
 
 def w2(x5, x6):
+    x5 = x5.rename(pc='pc1')
+    x6 = x6.rename(pc='pc2')
+
     x7 = ((x5.m - x6.m)**2).sum(dim='cols1')
 
     x8 = (x5.s**2).sum()+(x6.s**2).sum()
@@ -69,9 +75,9 @@ def w2(x5, x6):
 
 def log_prob(x5, x6):
     x7 = ((x5-x6.m) @ x6.v)/x6.s
-    x7 = (x7**2).sum(dim='src_train_pc2').mean()
+    x7 = (x7**2).sum(dim='pc').mean()
 
-    x8 = np.log(2*np.pi)*x6.sizes['src_train_pc2']
+    x8 = np.log(2*np.pi)*x6.sizes['pc']
 
     x9 = np.log(x6.s).sum()
 
@@ -80,6 +86,33 @@ def log_prob(x5, x6):
 def kl1(x5, x6):
     return (-log_prob(x5.data, x6)+log_prob(x6.data, x6))
 
+def proj1(x5, x6):
+    x5 = x5.rename(pc='pc1')
+    x6 = x6.rename(pc='pc2')
+    y1 = (x5.v @ x6.v) * x5.s
+    y1 = y1.transpose('pc1', 'pc2')
+    y1 = SVD.from_mat(y1).xarray[['v', 's']]
+    y1['v'] = y1.v @ x6.v
+    y1['m'] = x6.m + x6.v @ (x6.v @ (x5.m-x6.m))
+    if 'pc2' in y1.dims:
+        y1 = y1.drop('pc2')
+    return y1
+
+def proj2(x5, x6):    
+    y2 = x6.m + ((x5.data-x6.m) @ x6.v) @ x6.v
+    y2 = y2.rename('data').to_dataset()
+    y2['m'] = y2.data.mean(dim='rows')
+    y2['data'] = y2.data-y2.m
+    y2['data'] = y2.data/np.sqrt(y2.sizes['rows'])
+    y3 = y2.data.transpose('rows', 'cols1')
+    y3 = SVD.from_mat(y3).xarray[['s', 'v']]
+    y2 = xa.merge([y2, y3])
+    return y2
+
+def kl2(x5, x6):
+    x5 = proj1(x5, x6)
+    x6 = proj1(x6, x5)
+    return kl(x5, x6)
 
 # %%
 class _analysis5(_analysis):    
@@ -95,18 +128,17 @@ def x1(self):
     data = self.data2
     x1 = data[['src', x1]].rename({x1: 'data', f'{x1}_cols': 'cols'})
     x1['train'] = self._train_split.train
+    x1['src_train'] = x1.src.to_series()+':'+x1.train.to_series().astype(str)
 
-    x2 = {k: list(x.data) for k, x in x1.rows.groupby(x1.src)}
-    x2 = x2['dm']+list(np.random.choice(x2['gdc'], len(x2['dm']), replace=False))
-    x1 = x1.sel(rows=x1.rows.isin(x2))
+    #x2 = {k: list(x.data) for k, x in x1.rows.groupby(x1.src)}
+    #x2 = x2['dm']+list(np.random.choice(x2['gdc'], len(x2['dm']), replace=False))
+    #x1 = x1.sel(rows=x1.rows.isin(x2))
 
     if self.perm:
         x2, x3 = [x for _, x in x1.groupby('src')]
         x2['cols'] = 'cols', np.random.permutation(x2.cols.data)
         x1 = xa.concat([x2, x3], dim='rows')
 
-    x1 = xa.merge([x1.drop('data'), scale(x1.data).rename('data')], join='inner')
-    x1 = x1.transpose('rows', 'cols')
     return x1
 _analysis5.x1 = x1
 
@@ -114,13 +146,33 @@ _analysis5.x1 = x1
 @compose(property, lazy)
 def x2(self):
     x1 = self.x1
-    
+    x1 = xa.merge([x1.drop('data'), scale(x1.data).rename('data')], join='inner')
+    x1 = x1.transpose('rows', 'cols')
+
     x2 = SVD.from_mat(x1.data, n=200, solver='rand').us.persist()
     x2 = xa.merge([x2.rename('data'), x1[['src', 'train']]])
     x2['src_train'] = x2.src.to_series()+':'+x2.train.to_series().astype(str)
     x2 = x2.rename(pc='cols1')
     return x2
-_analysis5.x2 = x2
+
+@compose(property, lazy)
+def x2_1(self):
+    x2 = self.x1.copy()
+    x3 = x2.data
+    #x3 = scale(x2.data.sel(rows=x2.train)
+    x4 = x3.mean(dim='rows')
+    x3 = x3-x4
+    x5 = np.sqrt((x3**2).sum(dim='rows'))
+    x3 = x3/x5
+    x3 = x3.transpose('rows', 'cols').persist()
+    x3 = SVD.from_mat(x3, n=200, solver='rand').v.persist()
+    x2 = xa.merge([
+        (((x2.data-x4)/x5)@x3).rename('data', pc='cols1'),
+        x2.drop_dims('cols')
+    ]).persist()
+    return x2
+
+_analysis5.x2 = x2_1
 
 # %%
 @compose(property, lazy)
@@ -178,6 +230,8 @@ def x3_1(self):
         cov = x.data.transpose('rows', 'cols1')
         x = x.drop_dims('rows').expand_dims(src_train1=[n])
         cov = SVD.from_mat(cov).xarray[['s', 'v']]
+        cov = cov.sel(pc=(np.cumsum(cov.s**2)/np.sum(cov.s**2)).compute()<0.95)
+        #cov['s'] = np.sqrt(cov.s**2+1e-6)
         cov = cov.expand_dims(src_train=[n])
         cov = cov.stack(src_train_pc=['src_train', 'pc'], create_index=False)    
         return x, cov
@@ -186,8 +240,7 @@ def x3_1(self):
     x3 = xa.merge([
         xa.concat(x, dim=d) 
         for x, d in zip(x3, ['src_train1', 'src_train_pc'])
-    ])
-    x3['s'] = np.sqrt(x3.s**2+1e-6)
+    ])    
     x3 = x3.persist()
     return x3
 _analysis5.x3_1 = x3_1
@@ -202,59 +255,16 @@ def x4_1(self):
 _analysis5.x4_1 = x4_1
 
 # %%
-@compose(property, lazy)
-def x9_1(self):
-    x4, d = self.x4_1, kl
-    return dist(x4, d)
-
-_analysis5.x9_1 = x9_1
-
-# %%
-@compose(property, lazy)
-def x9_2(self):
-    x4, d = self.x4_1, w2
-    return dist(x4, d)
-
-_analysis5.x9_2 = x9_2
-
-# %%
-@compose(property, lazy)
-def x9_3(self):    
-    x4, d = self.x4_1, kl1    
-    return dist(x4, d)
-
-_analysis5.x9_3 = x9_3
+def _dist(self, d):
+    return dist(self.x4_1, d)
+_analysis5.dist = _dist
 
 # %%
 analysis5 = _analysis5('20230531/0.5', 0.5, src='expr', perm=False)
 self = analysis5
 
 # %%
-x9 = analysis5.x9_1
-(
-    p9.ggplot(x9)+
-        p9.aes(
-            'src_train1', 'src_train2', 
-            fill='np.log10(dist+1)', label='dist.astype(int)'
-        )+
-        p9.geom_tile()+
-        p9.geom_text()
-)
-
-# %%
-x9 = analysis5.x9_2
-(
-    p9.ggplot(x9)+
-        p9.aes(
-            'src_train1', 'src_train2', 
-            fill='np.log10(dist+1)', label='dist.astype(int)'
-        )+
-        p9.geom_tile()+
-        p9.geom_text()
-)
-
-# %%
-x9 = analysis5.x9_3
+x9 = analysis5.dist(kl2)
 (
     p9.ggplot(x9)+
         p9.aes(
