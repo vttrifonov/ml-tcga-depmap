@@ -91,12 +91,12 @@ def proj1(x5, x6):
     x6 = x6.rename(pc='pc2')
     y1 = (x5.v @ x6.v) * x5.s
     y1 = y1.transpose('pc1', 'pc2')
-    y1 = SVD.from_mat(y1).xarray[['v', 's']]
+    y1 = SVD.from_mat(y1).xarray[['u', 'v', 's']]
     y1['v'] = y1.v @ x6.v
-    y1['m'] = x6.m + x6.v @ (x6.v @ (x5.m-x6.m))
+    y1['m'] = x6.m + x6.v @ (x6.v @ (x5.m-x6.m))    
     if 'pc2' in y1.dims:
         y1 = y1.drop('pc2')
-    return y1
+    return y1[['s', 'v', 'm']], y1.u
 
 def proj2(x5, x6):    
     y2 = x6.m + ((x5.data-x6.m) @ x6.v) @ x6.v
@@ -109,9 +109,44 @@ def proj2(x5, x6):
     y2 = xa.merge([y2, y3])
     return y2
 
+def proj3(x6, x7):
+    x9 = np.eye(x6.sizes['pc'])
+    x9 = xa.DataArray(x9, [('pc2', range(len(x9))), ('pc1', range(len(x9)))])
+    def _(x5):
+        nonlocal x6, x9
+        x5, _ = proj1(x5, x6)
+        x6, u = proj1(x6, x5)
+        x9 = (x9 @ u).rename(pc='pc1')
+        return x5    
+    x7 = [_(x5) for x5 in x7]
+    x9 = x9.rename(pc2='pc')
+    return x6, x9, x7
+
+def dist1(x4, d):
+    x4 = {
+        k: x.sel(src_train1=x.src_train.data[0]).\
+            sel(rows=x.src_train2==x.src_train.data[0]).\
+            drop(['src_train', 'src_train1', 'src_train2']).\
+            rename(src_train_pc='pc')
+        for k, x in x4.groupby('src_train')
+    }
+
+    x8 = []
+    for k2, x6 in x4.items():    
+        x6, _, x7 = proj3(x6, x4.values())
+        x7 = [
+            d(proj1(x5, x6)[0], x6).expand_dims(src_train1=[k1]) 
+            for k1, x5 in zip(x4.keys(), x7)
+        ]
+        x7 = xa.concat(x7, dim='src_train1')
+        x8.append(x7.expand_dims(src_train2=[k2]))
+    x8 = xa.concat(x8, dim='src_train2')
+    x8 = x8.rename('dist').rename('dist').to_dataframe().reset_index()
+    return x8
+
 def kl2(x5, x6):
-    x5 = proj1(x5, x6)
-    x6 = proj1(x6, x5)
+    x5, _ = proj1(x5, x6)
+    x6, _ = proj1(x6, x5)
     return kl(x5, x6)
 
 # %%
@@ -129,7 +164,7 @@ def x1(self):
     x1 = data[['src', x1]].rename({x1: 'data', f'{x1}_cols': 'cols'})
     x1['train'] = self._train_split.train
     x1['src_train'] = x1.src.to_series()+':'+x1.train.to_series().astype(str)
-
+    
     #x2 = {k: list(x.data) for k, x in x1.rows.groupby(x1.src)}
     #x2 = x2['dm']+list(np.random.choice(x2['gdc'], len(x2['dm']), replace=False))
     #x1 = x1.sel(rows=x1.rows.isin(x2))
@@ -159,7 +194,7 @@ def x2(self):
 def x2_1(self):
     x2 = self.x1.copy()
     x3 = x2.data
-    #x3 = scale(x2.data.sel(rows=x2.train)
+    x3 = x2.data.sel(rows=x2.train)
     x4 = x3.mean(dim='rows')
     x3 = x3-x4
     x5 = np.sqrt((x3**2).sum(dim='rows'))
@@ -264,7 +299,31 @@ analysis5 = _analysis5('20230531/0.5', 0.5, src='expr', perm=False)
 self = analysis5
 
 # %%
+x9 = analysis5.dist(kl)
+(
+    p9.ggplot(x9)+
+        p9.aes(
+            'src_train1', 'src_train2', 
+            fill='np.log10(dist+1)', label='dist.astype(int)'
+        )+
+        p9.geom_tile()+
+        p9.geom_text()
+)
+
+# %%
 x9 = analysis5.dist(kl2)
+(
+    p9.ggplot(x9)+
+        p9.aes(
+            'src_train1', 'src_train2', 
+            fill='np.log10(dist+1)', label='dist.astype(int)'
+        )+
+        p9.geom_tile()+
+        p9.geom_text()
+)
+
+# %%
+x9 = dist1(self.x4_1, kl)
 (
     p9.ggplot(x9)+
         p9.aes(
