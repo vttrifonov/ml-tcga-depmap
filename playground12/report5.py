@@ -56,9 +56,7 @@ def kl(x5, x6):
 
     x11 = np.log(x6.s).sum()-np.log(x5.s).sum()
 
-    x12 = np.log(2*np.pi)*(x6.sizes['pc2']-x5.sizes['pc1'])
-
-    return 0.5*(x12 + x8 + x9 - x10) + x11
+    return 0.5*(x8 + x9 - x10) - x11
 
 def w2(x5, x6):
     x5 = x5.rename(pc='pc1')
@@ -73,9 +71,31 @@ def w2(x5, x6):
     
     return x7+x8-2*x9
 
+def ent(x6):
+    return 0.5*x6.sizes['pc']*(np.log(2*np.pi)+1)-np.log(x6.s).sum()
+
+def ce(x5, x6): 
+    x5 = x5.rename(pc='pc1')
+    x6 = x6.rename(pc='pc2')
+
+    x8 = x5.s * (x5.v @ x6.v) / x6.s
+    x8 = (x8**2).sum()
+
+    x9 = ((x5.m - x6.m) @ x6.v)/x6.s
+    x9 = (x9**2).sum()
+
+    x11 = np.log(x6.s).sum()
+
+    x12 = np.log(2*np.pi)*x6.sizes['pc2']
+
+    return 0.5*(x8 + x9 + x12) - x11
+
+def ent1(x6):
+    return ce(x6, x6)
+
 def log_prob(x5, x6):
     x7 = ((x5-x6.m) @ x6.v)/x6.s
-    x7 = (x7**2).sum(dim='pc').mean()
+    x7 = (x7**2).sum(dim='pc')
 
     x8 = np.log(2*np.pi)*x6.sizes['pc']
 
@@ -83,29 +103,39 @@ def log_prob(x5, x6):
 
     return -0.5*(x8+x7)+x9
 
+def ce1(x5, x6):
+    return -log_prob(x5.data, x6).mean()
+
+def ent2(x6):
+    return ce1(x6, x6)
+
 def kl1(x5, x6):
-    return (-log_prob(x5.data, x6)+log_prob(x6.data, x6))
+    return ce1(x5, x6)-ent2(x5)
+
+def kl2(x5, x6):
+    return ce(x5, x6)-ent(x5)
 
 def proj1(x5, x6):
     x5 = x5.rename(pc='pc1')
     x6 = x6.rename(pc='pc2')
-    y1 = (x5.v @ x6.v) * x5.s
+    y1 = (x5.v @ x6.v) * x5.s 
     y1 = y1.transpose('pc1', 'pc2')
-    y1 = SVD.from_mat(y1).xarray[['u', 'v', 's']]
+    y1 = SVD.from_mat(y1).xarray
     y1['v'] = y1.v @ x6.v
-    y1['m'] = x6.m + x6.v @ (x6.v @ (x5.m-x6.m))    
+    y1['m'] = x6.m + x6.v @ (x6.v @ (x5.m-x6.m))
     if 'pc2' in y1.dims:
         y1 = y1.drop('pc2')
-    return y1[['s', 'v', 'm']], y1.u
+    return y1
 
 def proj2(x5, x6):    
     y2 = x6.m + ((x5.data-x6.m) @ x6.v) @ x6.v
     y2 = y2.rename('data').to_dataset()
     y2['m'] = y2.data.mean(dim='rows')
-    y2['data'] = y2.data-y2.m
-    y2['data'] = y2.data/np.sqrt(y2.sizes['rows'])
-    y3 = y2.data.transpose('rows', 'cols1')
+    y3 = y2.data-y2.m
+    y3 = y3/np.sqrt(y3.sizes['rows'])
+    y3 = y3.transpose('rows', 'cols1')
     y3 = SVD.from_mat(y3).xarray[['s', 'v']]
+    y3 = y3.sel(pc=range(min(x5.sizes['pc'], x6.sizes['pc'])))
     y2 = xa.merge([y2, y3])
     return y2
 
@@ -114,15 +144,16 @@ def proj3(x6, x7):
     x9 = xa.DataArray(x9, [('pc2', range(len(x9))), ('pc1', range(len(x9)))])
     def _(x5):
         nonlocal x6, x9
-        x5, _ = proj1(x5, x6)
-        x6, u = proj1(x6, x5)
-        x9 = (x9 @ u).rename(pc='pc1')
+        x5 = proj1(x5, x6).drop_dims('pc1')
+        x6 = proj1(x6, x5)
+        x9 = (x9 @ x6.u).rename(pc='pc1')
+        x6 = x6.drop_dims('pc1')
         return x5    
     x7 = [_(x5) for x5 in x7]
     x9 = x9.rename(pc2='pc')
     return x6, x9, x7
 
-def dist1(x4, d):
+def dist1(x4):
     x4 = {
         k: x.sel(src_train1=x.src_train.data[0]).\
             sel(rows=x.src_train2==x.src_train.data[0]).\
@@ -135,7 +166,7 @@ def dist1(x4, d):
     for k2, x6 in x4.items():    
         x6, _, x7 = proj3(x6, x4.values())
         x7 = [
-            d(proj1(x5, x6)[0], x6).expand_dims(src_train1=[k1]) 
+            kl(proj1(x5, x6).drop_dims('pc1'), x6).expand_dims(src_train1=[k1]) 
             for k1, x5 in zip(x4.keys(), x7)
         ]
         x7 = xa.concat(x7, dim='src_train1')
@@ -144,10 +175,38 @@ def dist1(x4, d):
     x8 = x8.rename('dist').rename('dist').to_dataframe().reset_index()
     return x8
 
-def kl2(x5, x6):
-    x5, _ = proj1(x5, x6)
-    x6, _ = proj1(x6, x5)
-    return kl(x5, x6)
+def proj4(x6, x7):
+    def _(x5):
+        nonlocal x6
+        x5 = proj2(x5, x6)
+        x6 = proj2(x6, x5)
+        return x5    
+    x7 = [_(x5) for x5 in x7]
+    return x6, x7
+
+def dist2(x4):
+    x4 = {
+        k: x.sel(src_train1=x.src_train.data[0]).\
+            sel(rows=x.src_train2==x.src_train.data[0]).\
+            drop(['src_train', 'src_train1', 'src_train2']).\
+            rename(src_train_pc='pc')
+        for k, x in x4.groupby('src_train')
+    }
+
+    x4 = {k: proj2(x, x) for k, x in x4.items()}
+
+    x8 = []
+    for k2, x6 in x4.items():    
+        x6, x7 = proj4(x6, x4.values())
+        x7 = [
+            kl1(proj2(x5, x6), x6).expand_dims(src_train1=[k1]) 
+            for k1, x5 in zip(x4.keys(), x7)
+        ]
+        x7 = xa.concat(x7, dim='src_train1')
+        x8.append(x7.expand_dims(src_train2=[k2]))
+    x8 = xa.concat(x8, dim='src_train2')
+    x8 = x8.rename('dist').rename('dist').to_dataframe().reset_index()
+    return x8
 
 # %%
 class _analysis5(_analysis):    
@@ -299,18 +358,6 @@ analysis5 = _analysis5('20230531/0.5', 0.5, src='expr', perm=False)
 self = analysis5
 
 # %%
-x9 = analysis5.dist(kl)
-(
-    p9.ggplot(x9)+
-        p9.aes(
-            'src_train1', 'src_train2', 
-            fill='np.log10(dist+1)', label='dist.astype(int)'
-        )+
-        p9.geom_tile()+
-        p9.geom_text()
-)
-
-# %%
 x9 = analysis5.dist(kl2)
 (
     p9.ggplot(x9)+
@@ -323,7 +370,19 @@ x9 = analysis5.dist(kl2)
 )
 
 # %%
-x9 = dist1(self.x4_1, kl)
+x9 = dist1(self.x4_1)
+(
+    p9.ggplot(x9)+
+        p9.aes(
+            'src_train1', 'src_train2', 
+            fill='np.log10(dist+1)', label='dist.astype(int)'
+        )+
+        p9.geom_tile()+
+        p9.geom_text()
+)
+
+# %%
+x9 = dist2(self.x4_1)
 (
     p9.ggplot(x9)+
         p9.aes(
