@@ -56,7 +56,9 @@ def kl(x5, x6):
 
     x11 = np.log(x6.s).sum()-np.log(x5.s).sum()
 
-    return 0.5*(x8 + x9 - x10) - x11
+    x12 = np.log(2*np.pi)*(x6.sizes['pc2']-x5.sizes['pc1'])
+
+    return 0.5*(x8 + x9 - x10 + x12) + x11
 
 def w2(x5, x6):
     x5 = x5.rename(pc='pc1')
@@ -72,7 +74,7 @@ def w2(x5, x6):
     return x7+x8-2*x9
 
 def ent(x6):
-    return 0.5*x6.sizes['pc']*(np.log(2*np.pi)+1)-np.log(x6.s).sum()
+    return 0.5*x6.sizes['pc']*(np.log(2*np.pi)+1)+np.log(x6.s).sum()
 
 def ce(x5, x6): 
     x5 = x5.rename(pc='pc1')
@@ -88,7 +90,7 @@ def ce(x5, x6):
 
     x12 = np.log(2*np.pi)*x6.sizes['pc2']
 
-    return 0.5*(x8 + x9 + x12) - x11
+    return 0.5*(x8 + x9 + x12) + x11
 
 def ent1(x6):
     return ce(x6, x6)
@@ -101,7 +103,7 @@ def log_prob(x5, x6):
 
     x9 = np.log(x6.s).sum()
 
-    return -0.5*(x8+x7)+x9
+    return -0.5*(x8+x7)-x9
 
 def ce1(x5, x6):
     return -log_prob(x5.data, x6).mean()
@@ -358,7 +360,41 @@ analysis5 = _analysis5('20230531/0.5', 0.5, src='expr', perm=False)
 self = analysis5
 
 # %%
-x9 = analysis5.dist(kl2)
+def test1(x4, k1, k2):    
+    x5 = [x4.sel(src_train_pc=x4.src_train==k) for k in [k1, k2]]
+    x5 = [
+        x.sel(src_train1=x.src_train.data[0]).\
+            sel(rows=x.src_train2==x.src_train.data[0]).\
+            drop(['src_train', 'src_train1', 'src_train2']).\
+            rename(src_train_pc='pc')
+        for x in x5
+    ]
+    x5, x6 = [proj2(x, x) for x in x5]
+
+    y1 = proj2(x5, x6)
+    y2 = proj2(x6, y1)
+    print([
+        f(y1, y2).values  for f in [kl, kl1, kl2]
+    ])
+
+    y1 = proj1(x5, x6).drop_dims('pc1')
+    y2 = proj1(x6, y1).drop_dims('pc1')
+    print([
+        f(y1, y2).values for f in [kl, kl2]
+    ])
+
+    print([
+        [
+            ((x-y1.v.rename(pc='pc1') @ (y1.v.rename(pc='pc1') @ x))**2).sum().values
+            for x in [y2.v, y1.m-y2.m]
+        ]
+        for y1, y2 in [(y1, y2), (y2, y1)]
+    ])
+
+test1(self.x4_1, 'gdc:False', 'dm:True')
+
+# %%
+x9 = analysis5.dist(lambda x5, x6: kl2(proj2(x5, x5), x6))
 (
     p9.ggplot(x9)+
         p9.aes(
