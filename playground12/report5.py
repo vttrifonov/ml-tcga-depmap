@@ -18,26 +18,35 @@ from ..svd import SVD
 from . import _analysis, _scale2 as scale
 
 # %%
+def cov1(x):
+    x['m'] = x.data.mean(dim='rows')
+    x['data'] = x.data-x.m
+    x['data'] = x.data/np.sqrt(x.sizes['rows'])
+    cov = x.data.rename(cols1='cols1_1') @ x.data
+    cov = cov + np.diag([1e-6]*cov.shape[0])
+    cov = SVD.from_mat(cov).xarray[['s', 'v']]
+    cov['s'] = np.sqrt(cov.s)
+    x = xa.merge([x.drop_dims('rows'), cov])
+    return x
+
+def cov2(x):
+    x['m'] = x.data.mean(dim='rows')
+    x['data'] = x.data-x.m
+    x['data'] = x.data/np.sqrt(x.sizes['rows'])
+    cov = x.data.transpose('rows', 'cols1')
+    x = x.drop_dims('rows').expand_dims(src_train1=[n])
+    cov = SVD.from_mat(cov).xarray[['s', 'v']]
+    cov = cov.sel(pc=(np.cumsum(cov.s**2)/np.sum(cov.s**2)).compute()<0.95)
+    #cov['s'] = np.sqrt(cov.s**2+1e-6)
+    return x, cov
+
 def dist(x4, d):
-    x5, x6 = [
-        x4.sel(src_train_pc=x4.src_train==n)
-        for n in ['gdc:True', 'dm:True']
-    ]
-    def _(x5, x6):
-        x5, x6 = [
-            x.sel(src_train1=x.src_train.data[0]).\
-                sel(rows=x.src_train2==x.src_train.data[0]).\
-                drop(['src_train', 'src_train1', 'src_train2']).\
-                rename(src_train_pc='pc')
-            for x in [x5, x6]
-        ]
-        return d(x5, x6)
     x9 = xa.concat([
         xa.concat([
-            _(x5, x6).expand_dims(src_train2=[n6])
-            for n6, x6 in x4.groupby('src_train')
+            d(x5, x6).expand_dims(src_train2=[n6])
+            for n6, x6 in x4.items()
         ], dim='src_train2').expand_dims(src_train1=[n5])
-        for n5, x5 in x4.groupby('src_train')
+        for n5, x5 in x4.items()
     ], dim='src_train1')
     x9 = x9.rename('dist').to_dataframe().reset_index()
     return x9
@@ -156,14 +165,6 @@ def proj3(x6, x7):
     return x6, x9, x7
 
 def dist1(x4):
-    x4 = {
-        k: x.sel(src_train1=x.src_train.data[0]).\
-            sel(rows=x.src_train2==x.src_train.data[0]).\
-            drop(['src_train', 'src_train1', 'src_train2']).\
-            rename(src_train_pc='pc')
-        for k, x in x4.groupby('src_train')
-    }
-
     x8 = []
     for k2, x6 in x4.items():    
         x6, _, x7 = proj3(x6, x4.values())
@@ -187,16 +188,6 @@ def proj4(x6, x7):
     return x6, x7
 
 def dist2(x4):
-    x4 = {
-        k: x.sel(src_train1=x.src_train.data[0]).\
-            sel(rows=x.src_train2==x.src_train.data[0]).\
-            drop(['src_train', 'src_train1', 'src_train2']).\
-            rename(src_train_pc='pc')
-        for k, x in x4.groupby('src_train')
-    }
-
-    x4 = {k: proj2(x, x) for k, x in x4.items()}
-
     x8 = []
     for k2, x6 in x4.items():    
         x6, x7 = proj4(x6, x4.values())
@@ -273,21 +264,12 @@ _analysis5.x2 = x2_1
 # %%
 @compose(property, lazy)
 def x3(self):
-    x2 = self.x2
-    
+    x2 = self.x2    
     x3 = x2.groupby('src_train')
-    def _(n, x):
-        x['m'] = x.data.mean(dim='rows')
-        x['data'] = x.data-x.m
-        x['data'] = x.data/np.sqrt(x.sizes['rows'])
-        cov = x.data.rename(cols1='cols1_1') @ x.data
-        cov = cov + np.diag([1e-6]*cov.shape[0])
-        cov = SVD.from_mat(cov).xarray[['s', 'v']]
-        cov['s'] = np.sqrt(cov.s)
-        x = xa.merge([x.drop_dims('rows'), cov])
-        x = x.expand_dims(src_train=[n])
-        return x
-    x3 = xa.concat([_(n, x) for n, x in x3], dim='src_train')
+    x3 = xa.concat([
+        cov1(x).expand_dims(src_train=[n])
+        for n, x in x3
+    ], dim='src_train')
     x3 = x3.persist()
     return x3
 _analysis5.x3 = x3
@@ -320,14 +302,7 @@ def x3_1(self):
     x2 = self.x2
     x3 = x2.groupby('src_train')
     def _(n, x):
-        x['m'] = x.data.mean(dim='rows')
-        x['data'] = x.data-x.m
-        x['data'] = x.data/np.sqrt(x.sizes['rows'])
-        cov = x.data.transpose('rows', 'cols1')
-        x = x.drop_dims('rows').expand_dims(src_train1=[n])
-        cov = SVD.from_mat(cov).xarray[['s', 'v']]
-        cov = cov.sel(pc=(np.cumsum(cov.s**2)/np.sum(cov.s**2)).compute()<0.95)
-        #cov['s'] = np.sqrt(cov.s**2+1e-6)
+        x, cov = cov2(x)
         cov = cov.expand_dims(src_train=[n])
         cov = cov.stack(src_train_pc=['src_train', 'pc'], create_index=False)    
         return x, cov
@@ -343,33 +318,29 @@ _analysis5.x3_1 = x3_1
 
 # %%
 @property
-def x4_1(self):
-    return xa.merge([
+def x4_2(self):
+    x4 = xa.merge([
         self.x3_1.drop('pc'), 
         self.x2[['data', 'src_train']].rename(src_train='src_train2')
     ])
-_analysis5.x4_1 = x4_1
+    x4 = {
+        k: x.sel(src_train1=x.src_train.data[0]).\
+            sel(rows=x.src_train2==x.src_train.data[0]).\
+            drop(['src_train', 'src_train1', 'src_train2']).\
+            rename(src_train_pc='pc')
+        for k, x in x4.groupby('src_train')
+    }
+    x4 = {k: proj2(x, x) for k, x in x4.items()}
+    return x4    
+_analysis5.x4_2 = x4_2
 
 # %%
-def _dist(self, d):
-    return dist(self.x4_1, d)
-_analysis5.dist = _dist
-
-# %%
-analysis5 = _analysis5('20230531/0.5', 0.5, src='expr', perm=False)
+analysis5 = _analysis5('20230531/0.5', 0.5, src='cnv', perm=True)
 self = analysis5
 
 # %%
 def test1(x4, k1, k2):    
-    x5 = [x4.sel(src_train_pc=x4.src_train==k) for k in [k1, k2]]
-    x5 = [
-        x.sel(src_train1=x.src_train.data[0]).\
-            sel(rows=x.src_train2==x.src_train.data[0]).\
-            drop(['src_train', 'src_train1', 'src_train2']).\
-            rename(src_train_pc='pc')
-        for x in x5
-    ]
-    x5, x6 = [proj2(x, x) for x in x5]
+    x5, x6 = [x4[k] for k in [k1, k2]]
 
     y1 = proj2(x5, x6)
     y2 = proj2(x6, y1)
@@ -391,10 +362,10 @@ def test1(x4, k1, k2):
         for y1, y2 in [(y1, y2), (y2, y1)]
     ])
 
-test1(self.x4_1, 'gdc:False', 'dm:True')
+#test1(self.x4_1, 'gdc:False', 'dm:True')
 
 # %%
-x9 = analysis5.dist(lambda x5, x6: kl2(proj2(x5, x5), x6))
+x9 = dist(self.x4_2, lambda x5, x6: kl2(proj2(x5, x5), x6))
 (
     p9.ggplot(x9)+
         p9.aes(
@@ -406,7 +377,7 @@ x9 = analysis5.dist(lambda x5, x6: kl2(proj2(x5, x5), x6))
 )
 
 # %%
-x9 = dist1(self.x4_1)
+x9 = dist1(self.x4_2)
 (
     p9.ggplot(x9)+
         p9.aes(
@@ -418,7 +389,7 @@ x9 = dist1(self.x4_1)
 )
 
 # %%
-x9 = dist2(self.x4_1)
+x9 = dist2(self.x4_2)
 (
     p9.ggplot(x9)+
         p9.aes(
