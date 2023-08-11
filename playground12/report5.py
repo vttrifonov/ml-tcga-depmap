@@ -19,6 +19,7 @@ from . import _analysis, _scale2 as scale
 
 # %%
 def cov1(x):
+    x = x.copy()
     x['m'] = x.data.mean(dim='rows')
     x['data'] = x.data-x.m
     x['data'] = x.data/np.sqrt(x.sizes['rows'])
@@ -30,15 +31,26 @@ def cov1(x):
     return x
 
 def cov2(x):
-    x['m'] = x.data.mean(dim='rows')
-    x['data'] = x.data-x.m
-    x['data'] = x.data/np.sqrt(x.sizes['rows'])
-    cov = x.data.transpose('rows', 'cols1')
-    x = x.drop_dims('rows').expand_dims(src_train1=[n])
+    x1 = x[['data']].copy()
+    x1['m'] = x1.data.mean(dim='rows')
+    x1['data'] = x1.data-x1.m
+    x1['data'] = x1.data/np.sqrt(x1.sizes['rows'])
+    cov = x1.data.transpose('rows', 'cols1')
     cov = SVD.from_mat(cov).xarray[['s', 'v']]
     cov = cov.sel(pc=(np.cumsum(cov.s**2)/np.sum(cov.s**2)).compute()<0.95)
     #cov['s'] = np.sqrt(cov.s**2+1e-6)
-    return x, cov
+    return xa.merge([x.data, x1.m, cov])
+
+def cov3(x):
+    x1 = x.data
+    x2 = x1.mean(dim='rows')
+    x1 = x1-x2
+    x1 = x1/np.sqrt(x1.sizes['rows'])
+    cov = x1.transpose('rows', 'cols1')
+    cov = SVD.from_mat(cov).xarray[['u', 's', 'v']]
+    cov = cov.sel(pc=(np.cumsum(cov.s**2)/np.sum(cov.s**2)).compute()<0.95)
+    cov['m'] = x2
+    return cov
 
 def dist(x4, d):
     x9 = xa.concat([
@@ -232,18 +244,6 @@ _analysis5.x1 = x1
 # %%
 @compose(property, lazy)
 def x2(self):
-    x1 = self.x1
-    x1 = xa.merge([x1.drop('data'), scale(x1.data).rename('data')], join='inner')
-    x1 = x1.transpose('rows', 'cols')
-
-    x2 = SVD.from_mat(x1.data, n=200, solver='rand').us.persist()
-    x2 = xa.merge([x2.rename('data'), x1[['src', 'train']]])
-    x2['src_train'] = x2.src.to_series()+':'+x2.train.to_series().astype(str)
-    x2 = x2.rename(pc='cols1')
-    return x2
-
-@compose(property, lazy)
-def x2_1(self):
     x2 = self.x1.copy()
     x3 = x2.data
     x3 = x2.data.sel(rows=x2.train)
@@ -257,85 +257,27 @@ def x2_1(self):
         (((x2.data-x4)/x5)@x3).rename('data', pc='cols1'),
         x2.drop_dims('cols')
     ]).persist()
+    x2 = {k: v for k, v in x2.groupby('src_train')}
     return x2
 
-_analysis5.x2 = x2_1
+_analysis5.x2 = x2
 
 # %%
 @compose(property, lazy)
 def x3(self):
-    x2 = self.x2    
-    x3 = x2.groupby('src_train')
-    x3 = xa.concat([
-        cov1(x).expand_dims(src_train=[n])
-        for n, x in x3
-    ], dim='src_train')
-    x3 = x3.persist()
+    x3 = {
+        k: cov3(x).persist()
+        for k, x in self.x2.items()
+    }
+    #x3 = {
+    #    k: proj2(x, x).persist()
+    #    for k, x in x3.items()
+    #}
     return x3
 _analysis5.x3 = x3
 
 # %%
-@compose(property, lazy)
-def x9(self):
-    x3 = self.x3
-    
-    x4 = (x3.v*x3.s)
-    x5 = (x3.v/x3.s).rename(pc='pc1', src_train='src_train1')
-    x6 = x4 @ x5
-    x6 = (x6**2).sum(dim=['pc', 'pc1'])
-
-    x7 = x3.m - x3.m.rename(src_train='src_train1')
-    x7 = xa.dot(x7, x5, dims='cols1')
-    x7 = (x7**2).sum(dim='pc1')
-
-    x8 = np.log(x3.s).sum(dim='pc')
-    x8 = x8.rename(src_train='src_train1')-x8
-
-    x9 = 0.5*(x6 + x7 - x3.sizes['cols1'])+x8
-    x9 = x9.rename('kl').to_dataframe().reset_index()
-    return x9
-_analysis5.x9 = x9
-
-# %%
-@compose(property, lazy)
-def x3_1(self):
-    x2 = self.x2
-    x3 = x2.groupby('src_train')
-    def _(n, x):
-        x, cov = cov2(x)
-        cov = cov.expand_dims(src_train=[n])
-        cov = cov.stack(src_train_pc=['src_train', 'pc'], create_index=False)    
-        return x, cov
-    x3 = [_(*x) for x in x3]
-    x3 = list(zip(*x3))
-    x3 = xa.merge([
-        xa.concat(x, dim=d) 
-        for x, d in zip(x3, ['src_train1', 'src_train_pc'])
-    ])    
-    x3 = x3.persist()
-    return x3
-_analysis5.x3_1 = x3_1
-
-# %%
-@property
-def x4_2(self):
-    x4 = xa.merge([
-        self.x3_1.drop('pc'), 
-        self.x2[['data', 'src_train']].rename(src_train='src_train2')
-    ])
-    x4 = {
-        k: x.sel(src_train1=x.src_train.data[0]).\
-            sel(rows=x.src_train2==x.src_train.data[0]).\
-            drop(['src_train', 'src_train1', 'src_train2']).\
-            rename(src_train_pc='pc')
-        for k, x in x4.groupby('src_train')
-    }
-    x4 = {k: proj2(x, x) for k, x in x4.items()}
-    return x4    
-_analysis5.x4_2 = x4_2
-
-# %%
-analysis5 = _analysis5('20230531/0.5', 0.5, src='cnv', perm=True)
+analysis5 = _analysis5('20230531/0.5', 0.5, src='expr', perm=False)
 self = analysis5
 
 # %%
@@ -362,10 +304,10 @@ def test1(x4, k1, k2):
         for y1, y2 in [(y1, y2), (y2, y1)]
     ])
 
-#test1(self.x4_1, 'gdc:False', 'dm:True')
+#test1(self.x3_2, 'gdc:False', 'dm:True')
 
 # %%
-x9 = dist(self.x4_2, lambda x5, x6: kl2(proj2(x5, x5), x6))
+x9 = dist(self.x3, lambda x5, x6: kl2(x5, x6))
 (
     p9.ggplot(x9)+
         p9.aes(
@@ -377,7 +319,7 @@ x9 = dist(self.x4_2, lambda x5, x6: kl2(proj2(x5, x5), x6))
 )
 
 # %%
-x9 = dist1(self.x4_2)
+x9 = dist(self.x3, lambda x5, x6: kl2(proj2(x5, x5), x6))
 (
     p9.ggplot(x9)+
         p9.aes(
@@ -389,7 +331,19 @@ x9 = dist1(self.x4_2)
 )
 
 # %%
-x9 = dist2(self.x4_2)
+x9 = dist1(self.x3)
+(
+    p9.ggplot(x9)+
+        p9.aes(
+            'src_train1', 'src_train2', 
+            fill='np.log10(dist+1)', label='dist.astype(int)'
+        )+
+        p9.geom_tile()+
+        p9.geom_text()
+)
+
+# %%
+x9 = dist2(self.x3)
 (
     p9.ggplot(x9)+
         p9.aes(
