@@ -47,10 +47,11 @@ def cov3(x):
     x1 = x1-x2
     x1 = x1/np.sqrt(x1.sizes['rows'])
     cov = x1.transpose('rows', 'cols1')
-    cov = SVD.from_mat(cov).xarray[['u', 's', 'v']]
+    cov = SVD.from_mat(cov).xarray
+    cov['u'] = np.sqrt(x1.sizes['rows'])*cov.u
     cov = cov.sel(pc=(np.cumsum(cov.s**2)/np.sum(cov.s**2)).compute()<0.95)
     cov['m'] = x2
-    return cov
+    return xa.merge([x.data, cov])
 
 def dist(x4, d):
     x9 = xa.concat([
@@ -200,6 +201,7 @@ def proj4(x6, x7):
     return x6, x7
 
 def dist2(x4):
+    x4 = {k: proj2(x, x) for k, x in x4.items()}
     x8 = []
     for k2, x6 in x4.items():    
         x6, x7 = proj4(x6, x4.values())
@@ -213,12 +215,73 @@ def dist2(x4):
     x8 = x8.rename('dist').rename('dist').to_dataframe().reset_index()
     return x8
 
+def proj5(x5, x6):
+    x5 = x5.rename(pc='pc1')
+    x6 = x6.rename(pc='pc2')
+    y1 = (x5.v @ x6.v) * x5.s 
+    y1 = y1.transpose('pc1', 'pc2')
+    y1 = SVD.from_mat(y1).xarray
+    y1['u'] = y1.u @ x5.u
+    y1['v'] = y1.v @ x6.v
+    y1['m'] = x6.m + x6.v @ (x6.v @ (x5.m-x6.m))
+    y1 = y1.drop(['pc1', 'pc2'])
+    return y1
+
+def log_prob1(x5, x6):
+    x5 = x5.rename(pc='pc1')
+
+    x7 = x5.u @ (x5.s*((x5.v @ x6.v)/x6.s))
+    x7 = x7 + ((x5.m-x6.m) @ x6.v)/x6.s
+    x7 = (x7**2).sum(dim='pc')
+
+    x8 = np.log(2*np.pi)*x6.sizes['pc']
+
+    x9 = np.log(x6.s).sum()
+
+    return -0.5*(x8+x7)-x9
+
+
+def ce2(x5, x6):
+    return -log_prob1(x5, x6).mean()
+
+def ent3(x6):
+    return ce2(x6, x6)
+
+def kl3(x5, x6):
+    return ce2(x5, x6)-ent3(x5)
+
+
+def proj6(x6, x7):
+    def _(x5):
+        nonlocal x6
+        x5 = proj5(x5, x6)
+        x6 = proj5(x6, x5)
+        return x5    
+    x7 = [_(x5) for x5 in x7]
+    return x6, x7
+
+def dist3(x4, kl):
+    x8 = []
+    for k2, x6 in x4.items():    
+        x6, x7 = proj6(x6, x4.values())
+        x7 = [
+            kl(proj5(x5, x6), x6).expand_dims(src_train1=[k1]) 
+            for k1, x5 in zip(x4.keys(), x7)
+        ]
+        x7 = xa.concat(x7, dim='src_train1')
+        x8.append(x7.expand_dims(src_train2=[k2]))
+    x8 = xa.concat(x8, dim='src_train2')
+    x8 = x8.rename('dist').rename('dist').to_dataframe().reset_index()
+    return x8
+
+
 # %%
 class _analysis5(_analysis):    
-    def __init__(self, *args, src, perm):
+    def __init__(self, *args, src, perm, equalize):
         super().__init__(*args)
         self.src = src
         self.perm = perm
+        self.equalize = equalize
 
 # %%
 @compose(property, lazy)
@@ -228,15 +291,18 @@ def x1(self):
     x1 = data[['src', x1]].rename({x1: 'data', f'{x1}_cols': 'cols'})
     x1['train'] = self._train_split.train
     x1['src_train'] = x1.src.to_series()+':'+x1.train.to_series().astype(str)
-    
-    #x2 = {k: list(x.data) for k, x in x1.rows.groupby(x1.src)}
-    #x2 = x2['dm']+list(np.random.choice(x2['gdc'], len(x2['dm']), replace=False))
-    #x1 = x1.sel(rows=x1.rows.isin(x2))
 
-    if self.perm:
-        x2, x3 = [x for _, x in x1.groupby('src')]
-        x2['cols'] = 'cols', np.random.permutation(x2.cols.data)
-        x1 = xa.concat([x2, x3], dim='rows')
+    if self.equalize:    
+        x2 = {k: list(x.data) for k, x in x1.rows.groupby(x1.src)}
+        x2 = x2['dm']+list(np.random.choice(x2['gdc'], len(x2['dm']), replace=False))
+        x1 = x1.sel(rows=x1.rows.isin(x2))
+
+    if self.perm is not None:    
+        x2 = []
+        for _, x in x1.groupby(self.perm):
+            x['cols'] = 'cols', np.random.permutation(x.cols.data)
+            x2.append(x)            
+        x1 = xa.concat(x2, dim='rows')
 
     return x1
 _analysis5.x1 = x1
@@ -246,7 +312,7 @@ _analysis5.x1 = x1
 def x2(self):
     x2 = self.x1.copy()
     x3 = x2.data
-    x3 = x2.data.sel(rows=x2.train)
+    #x3 = x2.data.sel(rows=x2.train)
     x4 = x3.mean(dim='rows')
     x3 = x3-x4
     x5 = np.sqrt((x3**2).sum(dim='rows'))
@@ -269,19 +335,43 @@ def x3(self):
         k: cov3(x).persist()
         for k, x in self.x2.items()
     }
-    #x3 = {
-    #    k: proj2(x, x).persist()
-    #    for k, x in x3.items()
-    #}
     return x3
 _analysis5.x3 = x3
 
 # %%
-analysis5 = _analysis5('20230531/0.5', 0.5, src='expr', perm=False)
+analysis5 = _analysis5('20230531/0.5', 0.5, src='expr', perm=None, equalize=False)
 self = analysis5
 
 # %%
-def test1(x4, k1, k2):    
+#self.perm = None
+#self.src = 'expr'
+#self.equalize = True
+#del self.__lazy__x1_
+#del self.__lazy__x2_
+#del self.__lazy__x3_
+
+# %%
+def test2(self, k1, k2):    
+    x4 = self.x3
+    x5, x6 = [x4[k] for k in [k1, k2]]
+
+    y1 = proj5(x5, x6)
+    y2 = proj5(x6, y1)
+    print([
+        f(y1, y2).values  for f in [kl, kl3, kl2]
+    ])
+
+    print([
+        [
+            ((x-y1.v.rename(pc='pc1') @ (y1.v.rename(pc='pc1') @ x))**2).sum().values
+            for x in [y2.v, y1.m-y2.m]
+        ]
+        for y1, y2 in [(y1, y2), (y2, y1)]
+    ])
+
+
+def test1(self, k1, k2):    
+    x4 = self.x3
     x5, x6 = [x4[k] for k in [k1, k2]]
 
     y1 = proj2(x5, x6)
@@ -307,19 +397,7 @@ def test1(x4, k1, k2):
 #test1(self.x3_2, 'gdc:False', 'dm:True')
 
 # %%
-x9 = dist(self.x3, lambda x5, x6: kl2(x5, x6))
-(
-    p9.ggplot(x9)+
-        p9.aes(
-            'src_train1', 'src_train2', 
-            fill='np.log10(dist+1)', label='dist.astype(int)'
-        )+
-        p9.geom_tile()+
-        p9.geom_text()
-)
-
-# %%
-x9 = dist(self.x3, lambda x5, x6: kl2(proj2(x5, x5), x6))
+x9 = dist(self.x3, lambda x5, x6: kl2(proj5(x5, x6), x6))
 (
     p9.ggplot(x9)+
         p9.aes(
@@ -344,6 +422,30 @@ x9 = dist1(self.x3)
 
 # %%
 x9 = dist2(self.x3)
+(
+    p9.ggplot(x9)+
+        p9.aes(
+            'src_train1', 'src_train2', 
+            fill='np.log10(dist+1)', label='dist.astype(int)'
+        )+
+        p9.geom_tile()+
+        p9.geom_text()
+)
+
+# %%
+x9 = dist3(self.x3, kl2)
+(
+    p9.ggplot(x9)+
+        p9.aes(
+            'src_train1', 'src_train2', 
+            fill='np.log10(dist+1)', label='dist.astype(int)'
+        )+
+        p9.geom_tile()+
+        p9.geom_text()
+)
+
+# %%
+x9 = dist3(self.x3, kl3)
 (
     p9.ggplot(x9)+
         p9.aes(
